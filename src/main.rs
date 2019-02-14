@@ -24,20 +24,30 @@ struct Repo {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Output {
-    return Command::new(cmd)
+    let result = Command::new(cmd)
         .args(args)
         .output()
         .expect("failed to run git status");
+    trace!(
+        "Cmd {}: {} {:?}",
+        match result.status.code() {
+            Some(code) => format!("returned {}", code),
+            None => format!("terminated"),
+        },
+        cmd,
+        args
+    );
+    result
 }
 
 fn parse_branch(gs: &str) -> () {
     // info!("parse_branch received:\n{}", gs);
-    // TODO: iterate over this instead of collecting in vector
-    let s: Vec<&str> = gs.split("\n").collect();
-    info!("{:#?}", s);
-    // for line in gs.chars() {
-    //     println!("{}", line);
-    // }
+    for line in gs.split("\n") {
+        println!("{}", line);
+        for word in line.split(" ") {
+            println!("{}", word)
+        }
+    }
 }
 
 fn main() {
