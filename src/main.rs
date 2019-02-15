@@ -44,23 +44,39 @@ impl Repo {
         }
     }
     /* Parse git status by line */
-    fn parse_lines(&mut self, gs: &str) {
+    fn parse_status(&mut self, gs: &str) {
         for line in gs.lines() {
             let mut words = line.split_whitespace();
+            // scan by word
             while let Some(word) = words.next() {
-                if word.contains("branch.oid") {
-                    self.commit = words.next().map(String::from);
+                if word == "#" {
+                    while let Some(br) = words.next() {
+                        if br == "branch.oid" {
+                            self.commit = words.next().map(String::from);
+                        }
+                        if br == "branch.head" {
+                            self.branch = words.next().map(String::from);
+                        }
+                        if br == "branch.upstream" {
+                            self.upstream = words.next().map(String::from);
+                        }
+                        if br == "branch.ab" {
+                            self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
+                            self.behind = words.next().map_or(0, |s| s[1..].parse().unwrap());
+                        }
+                    }
                 }
-                if word.contains("branch.head") {
-                    self.branch = words.next().map(String::from);
+                if word == "1" {
+                    trace!("Tracked file: {}", line);
                 }
-                if word.contains("branch.upstream") {
-                    self.upstream = words.next().map(String::from);
+                if word == "2" {
+                    trace!("Renamed file: {}", line);
                 }
-                if word.contains("branch.ab") {
-                    trace!("Branch a/b: {}", &line);
-                    self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
-                    trace!("{:?}", words.next());
+                if word == "u" {
+                    trace!("Unmerged file: {}", line);
+                }
+                if word == "?" {
+                    trace!("Untracked file: {}", line);
                 }
             }
         }
@@ -76,7 +92,7 @@ fn run(cmd: &str, args: &[&str]) -> Output {
         "Cmd {}: {} {:?}",
         match result.status.code() {
             Some(code) => format!("returned {}", code),
-            None => format!("terminated"),
+            None => String::from("terminated"),
         },
         cmd,
         args
@@ -91,6 +107,6 @@ fn main() {
     let cmd = run("git", &["status", "--porcelain=2", "--branch"]);
     let status = str::from_utf8(&cmd.stdout).unwrap();
     let mut ri = Repo::new();
-    ri.parse_lines(status);
+    ri.parse_status(&status);
     println!("{:#?}", ri);
 }
