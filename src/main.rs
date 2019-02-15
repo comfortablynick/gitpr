@@ -58,8 +58,9 @@ impl Repo {
                     self.upstream = words.next().map(String::from);
                 }
                 if word.contains("branch.ab") {
+                    trace!("Branch a/b: {}", &line);
                     self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
-                    self.behind = words.next().map_or(0, |s| s.parse().unwrap());
+                    trace!("{:?}", words.next());
                 }
             }
         }
