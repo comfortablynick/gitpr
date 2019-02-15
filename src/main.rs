@@ -43,6 +43,7 @@ impl Repo {
             deletions: 0,
         }
     }
+    /* Parse git status by line */
     fn parse_lines(&mut self, gs: &str) {
         for line in gs.lines() {
             let mut words = line.split_whitespace();
