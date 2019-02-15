@@ -28,7 +28,7 @@ struct Repo {
 impl Repo {
     fn new() -> Repo {
         Repo {
-            working_dir: Some(env::current_dir().unwrap()),
+            working_dir: env::current_dir().ok(),
             git_dir: None,
             branch: None,
             commit: None,
@@ -41,6 +41,26 @@ impl Repo {
             unmerged: 0,
             insertions: 0,
             deletions: 0,
+        }
+    }
+    fn parse_lines(&mut self, gs: &str) {
+        for line in gs.lines() {
+            let mut words = line.split_whitespace();
+            while let Some(word) = words.next() {
+                if word.contains("branch.oid") {
+                    self.commit = words.next().map(String::from);
+                }
+                if word.contains("branch.head") {
+                    self.branch = words.next().map(String::from);
+                }
+                if word.contains("branch.upstream") {
+                    self.upstream = words.next().map(String::from);
+                }
+                if word.contains("branch.ab") {
+                    self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
+                    self.behind = words.next().map_or(0, |s| s.parse().unwrap());
+                }
+            }
         }
     }
 }
@@ -62,25 +82,13 @@ fn run(cmd: &str, args: &[&str]) -> Output {
     result
 }
 
-fn parse_branch(gs: &str) -> Repo {
-    let mut ri = Repo::new();
-    for line in gs.lines() {
-        let mut words = line.split_whitespace();
-        while let Some(word) = words.next() {
-            if word.contains("branch.oid") {
-                ri.branch = words.next().map(String::from);
-                println!("{}", line);
-            }
-        }
-    }
-    return ri;
-}
-
 fn main() {
     std::env::set_var("RUST_LOG", "trace");
+    std::env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
     let cmd = run("git", &["status", "--porcelain=2", "--branch"]);
     let status = str::from_utf8(&cmd.stdout).unwrap();
-    let ri = parse_branch(status);
+    let mut ri = Repo::new();
+    ri.parse_lines(status);
     println!("{:#?}", ri);
 }
