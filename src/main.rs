@@ -5,10 +5,6 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::{env, str};
 
-// struct Options {
-//
-// }
-
 #[derive(Debug)]
 struct Repo {
     working_dir: Option<PathBuf>,
@@ -36,6 +32,17 @@ struct GitArea {
     renamed: u32,
     copied: u32,
 }
+
+#[allow(dead_code)]
+const BRANCH_GLYPH: char = '';
+// const MODIFIED_GLYPH: char = 'Δ';
+// const DIRTY_GLYPH: char = '✘';
+// const CLEAN_GLYPH: char = '✔';
+// const UNTRACKED_GLYPH: char = '?';
+// const UNMERGED_GLYPH: char = '‼';
+// const AHEAD_GLYPH: char = '↑';
+// const BEHIND_GLYPH: char = '↓';
+// const STASH_GLYPH: char = '$';
 
 impl Repo {
     fn new() -> Repo {
@@ -124,6 +131,13 @@ impl Repo {
             _ => (),
         }
     }
+
+    fn fmt_branch(&self) -> String {
+        match &self.branch {
+            Some(s) => s.to_string(),
+            None => String::new(),
+        }
+    }
 }
 
 fn run(cmd: &str, args: &[&str]) -> Output {
@@ -163,7 +177,7 @@ fn main() {
                 match &c {
                     ' ' => out.push(' '),
                     'a' => out.push('a'),
-                    'b' => out.push_str(&ri.branch.as_ref().unwrap().to_string()),
+                    'b' => out.push_str(&ri.fmt_branch().as_str()),
                     'c' => trace!("show commit"),
                     'd' => trace!("show diff"),
                     'g' => trace!("show br glyph"),
@@ -178,6 +192,6 @@ fn main() {
             out.push(c);
         }
     }
-    info!("{:#?}", ri);
+    info!("{:#?}", &ri);
     info!("Output: {}", &out);
 }
