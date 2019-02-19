@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate log;
 extern crate env_logger;
+extern crate structopt;
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::{env, str};
+use std::{env, fs::File, str};
+use structopt::StructOpt;
 
 #[derive(Debug)]
 struct Repo {
@@ -34,17 +36,17 @@ struct GitArea {
 }
 
 #[allow(dead_code)]
-const BRANCH_GLYPH: char = '';
-// const MODIFIED_GLYPH: char = 'Δ';
-// const DIRTY_GLYPH: char = '✘';
-// const CLEAN_GLYPH: char = '✔';
-// const UNTRACKED_GLYPH: char = '?';
-// const UNMERGED_GLYPH: char = '‼';
-// const AHEAD_GLYPH: char = '↑';
-// const BEHIND_GLYPH: char = '↓';
-// const STASH_GLYPH: char = '$';
-
 impl Repo {
+    const BRANCH_GLYPH: char = '';
+    const MODIFIED_GLYPH: char = 'Δ';
+    const DIRTY_GLYPH: char = '✘';
+    const CLEAN_GLYPH: char = '✔';
+    const UNTRACKED_GLYPH: char = '?';
+    const UNMERGED_GLYPH: char = '‼';
+    const AHEAD_GLYPH: char = '↑';
+    const BEHIND_GLYPH: char = '↓';
+    const STASH_GLYPH: char = '$';
+
     fn new() -> Repo {
         Repo {
             working_dir: env::current_dir().ok(),
@@ -76,6 +78,15 @@ impl Repo {
             },
         }
     }
+
+    fn git_root_dir(&mut self) -> String {
+        let cmd = run("git", &["rev-parse", "--absolute-git-dir"]);
+        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
+        self.git_dir = Some(output);
+        // TODO: figure out ownership issue
+        self.git_dir.as_ref().unwrap().to_string()
+    }
+
     /* Parse git status by line */
     fn parse_status(&mut self, gs: &str) {
         for line in gs.lines() {
@@ -138,6 +149,47 @@ impl Repo {
             None => String::new(),
         }
     }
+
+    fn fmt_commit(&self, len: usize) -> String {
+        match &self.commit {
+            Some(s) => s[..len].to_string(),
+            None => String::new(),
+        }
+    }
+
+    fn fmt_ahead_behind(&self) -> String {
+        let mut out: String = String::new();
+        if self.ahead != 0 {
+            out.push_str(&format!("{}{}", Repo::AHEAD_GLYPH, self.ahead));
+        }
+        if self.behind != 0 {
+            out.push_str(&format!("{}{}", Repo::BEHIND_GLYPH, self.behind));
+        }
+        out
+    }
+
+    fn fmt_diff_numstat(&mut self) -> String {
+        let cmd = run("git", &["diff", "--numstat"]);
+        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
+        output
+    }
+
+    // fn fmt_stash(&mut self) -> String {
+    // let mut file = File::open(s);
+    // let mut s = String::new();
+    // file.read_to_string(&mut s)?;
+    // Ok(s)
+    // }
+}
+
+impl GitArea {
+    fn fmt_modified(&self) -> String {
+        let mut out: String = String::new();
+        if self.modified != 0 {
+            out.push_str(&format!("{}{}", Repo::MODIFIED_GLYPH, self.modified));
+        }
+        out
+    }
 }
 
 fn run(cmd: &str, args: &[&str]) -> Output {
@@ -157,35 +209,77 @@ fn run(cmd: &str, args: &[&str]) -> Output {
     result
 }
 
+#[derive(StructOpt, Debug)]
+#[structopt(
+    name = "gitpr",
+    about = "git repo status for shell prompt",
+    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
+)]
+struct Opt {
+    /// Debug verbosity (ex: -v, -vv, -vvv)
+    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
+    verbose: u8,
+
+    /// Format print-f style string
+    #[structopt(
+        short = "f",
+        long = "format",
+        default_value = "%g (%b@%c) %a %m%d%u%t %s",
+        long_help = "Tokenized string may contain:
+    %g  branch glyph ()
+    %n  VC name
+    %b  branch
+    %r  remote
+    %a  commits ahead/behind remote
+    %c  current commit hash
+    %m  unstaged changes (modified/added/removed)
+    %s  staged changes (modified/added/removed)
+    %u  untracked files
+    %d  diff lines, ex: \"+20/-10\"
+    %t  stashed files indicator
+"
+    )]
+    format: String,
+}
+
 fn main() {
-    std::env::set_var("RUST_LOG", "trace");
-    std::env::set_var("RUST_BACKTRACE", "1");
+    let opts = Opt::from_args();
+
+    std::env::set_var(
+        "RUST_LOG",
+        match &opts.verbose {
+            0 => "warning",
+            1 => "info",
+            2 | _ => "trace",
+        },
+    );
+    // std::env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
-    const FMT_STRING: &str = "%g (%b) %a %% %m%d%u%t %s";
-    trace!("format str: {}", &FMT_STRING);
     let cmd = run("git", &["status", "--porcelain=2", "--branch"]);
     let status = str::from_utf8(&cmd.stdout).unwrap();
     let mut ri = Repo::new();
     ri.parse_status(&status);
 
     // parse fmt string
-    let mut fmt_str = FMT_STRING.chars();
+    let mut fmt_str = opts.format.chars();
     let mut out: String = String::new();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match &c {
                     ' ' => out.push(' '),
-                    'a' => out.push('a'),
+                    'a' => out.push_str(&ri.fmt_ahead_behind().as_str()),
                     'b' => out.push_str(&ri.fmt_branch().as_str()),
-                    'c' => trace!("show commit"),
+                    'c' => out.push_str(&ri.fmt_commit(7).as_str()),
                     'd' => trace!("show diff"),
-                    'g' => trace!("show br glyph"),
-                    'm' => trace!("show modified"),
-                    'n' => trace!("show VCS name"),
-                    's' => trace!("show stage modified"),
+                    'g' => out.push(Repo::BRANCH_GLYPH),
+                    'm' => out.push_str(&ri.unstaged.fmt_modified().as_str()),
+                    'n' => out.push_str("git"),
+                    's' => out.push_str(&ri.staged.fmt_modified().as_str()),
+                    't' => trace!("show stashed"),
+                    'u' => trace!("show untracked"),
                     '%' => out.push('%'),
-                    _ => (),
+                    &c => panic!("Invalid flag: \"%{}\"", &c),
                 }
             }
         } else {
@@ -193,5 +287,8 @@ fn main() {
         }
     }
     info!("{:#?}", &ri);
-    info!("Output: {}", &out);
+    info!("{:#?}", &opts);
+    // trace!("{}", &ri.fmt_diff_numstat());
+    // trace!("{}", &ri.git_root_dir());
+    println!("{}", &out);
 }
