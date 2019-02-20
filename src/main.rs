@@ -1,10 +1,10 @@
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-extern crate structopt;
-use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::{env, fs::File, str};
+use log::{info, trace};
+use std::{
+    env,
+    path::PathBuf,
+    process::{Command, Output},
+    str,
+};
 use structopt::StructOpt;
 
 #[derive(Debug)]
@@ -81,10 +81,9 @@ impl Repo {
 
     fn git_root_dir(&mut self) -> String {
         let cmd = run("git", &["rev-parse", "--absolute-git-dir"]);
-        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
-        self.git_dir = Some(output);
-        // TODO: figure out ownership issue
-        self.git_dir.as_ref().unwrap().to_string()
+        let output = String::from_utf8(cmd.stdout).ok();
+        self.git_dir = output.clone();
+        output.unwrap_or_default().trim().to_string()
     }
 
     /* Parse git status by line */
@@ -174,12 +173,15 @@ impl Repo {
         output
     }
 
-    // fn fmt_stash(&mut self) -> String {
-    // let mut file = File::open(s);
-    // let mut s = String::new();
-    // file.read_to_string(&mut s)?;
-    // Ok(s)
-    // }
+    fn fmt_stash(&mut self) -> String {
+        let mut git = match self.git_dir.clone() {
+            Some(d) => d,
+            None => self.git_root_dir(),
+        };
+        git.push_str("/logs/refs/stash");
+        let st = std::fs::read_to_string(git).unwrap_or_default();
+        st
+    }
 }
 
 impl GitArea {
@@ -192,9 +194,12 @@ impl GitArea {
     }
 }
 
+// TODO: refactor to return a Result, possibly creating an error if exit status != 0
+// Possibly use rev-parse first, kill 2 birds?
 fn run(cmd: &str, args: &[&str]) -> Output {
     let result = Command::new(cmd)
         .args(args)
+        .current_dir(env::current_dir().expect("error getting current dir"))
         .output()
         .expect("failed to run git status");
     trace!(
@@ -217,7 +222,12 @@ fn run(cmd: &str, args: &[&str]) -> Output {
 )]
 struct Opt {
     /// Debug verbosity (ex: -v, -vv, -vvv)
-    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
+    #[structopt(
+        short = "v",
+        long = "verbose",
+        // default_value = "2",
+        parse(from_occurrences)
+    )]
     verbose: u8,
 
     /// Format print-f style string
@@ -240,12 +250,15 @@ struct Opt {
 "
     )]
     format: String,
+
+    #[structopt(short = "d", long = "dir", default_value = ".")]
+    dir: String,
 }
 
 fn main() {
     let opts = Opt::from_args();
 
-    std::env::set_var(
+    env::set_var(
         "RUST_LOG",
         match &opts.verbose {
             0 => "warning",
@@ -253,10 +266,11 @@ fn main() {
             2 | _ => "trace",
         },
     );
-    // std::env::set_var("RUST_BACKTRACE", "1");
+    env::set_current_dir(&opts.dir).expect("error setting current dir");
+    // env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
     let cmd = run("git", &["status", "--porcelain=2", "--branch"]);
-    let status = str::from_utf8(&cmd.stdout).unwrap();
+    let status = str::from_utf8(&cmd.stdout).expect("git status error");
     let mut ri = Repo::new();
     ri.parse_status(&status);
 
@@ -290,5 +304,6 @@ fn main() {
     info!("{:#?}", &opts);
     // trace!("{}", &ri.fmt_diff_numstat());
     // trace!("{}", &ri.git_root_dir());
+    trace!("{}", &ri.fmt_stash());
     println!("{}", &out);
 }
