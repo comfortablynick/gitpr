@@ -1,11 +1,52 @@
 use log::{info, trace};
 use std::{
-    env,
+    env, io,
     path::PathBuf,
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     str,
 };
 use structopt::StructOpt;
+
+#[derive(StructOpt, Debug)]
+#[structopt(
+    name = "gitpr",
+    about = "git repo status for shell prompt",
+    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
+)]
+struct Opt {
+    /// Debug verbosity (ex: -v, -vv, -vvv)
+    #[structopt(
+        short = "v",
+        long = "verbose",
+        // default_value = "2",
+        parse(from_occurrences)
+    )]
+    verbose: u8,
+
+    /// Format print-f style string
+    #[structopt(
+        short = "f",
+        long = "format",
+        default_value = "%g (%b@%c) %a %m%d%u%t %s",
+        long_help = "Tokenized string may contain:
+    %g  branch glyph ()
+    %n  VC name
+    %b  branch
+    %r  remote
+    %a  commits ahead/behind remote
+    %c  current commit hash
+    %m  unstaged changes (modified/added/removed)
+    %s  staged changes (modified/added/removed)
+    %u  untracked files
+    %d  diff lines, ex: \"+20/-10\"
+    %t  stashed files indicator
+"
+    )]
+    format: String,
+
+    #[structopt(short = "d", long = "dir", default_value = ".")]
+    dir: String,
+}
 
 #[derive(Debug)]
 struct Repo {
@@ -194,12 +235,27 @@ impl GitArea {
     }
 }
 
-// TODO: refactor to return a Result, possibly creating an error if exit status != 0
-// Possibly use rev-parse first, kill 2 birds?
+fn exec(cmd: &str) -> io::Result<Output> {
+    let args: Vec<&str> = cmd.split_whitespace().collect();
+    let command = Command::new(&args[0])
+        .args(args.get(1..).expect("missing args in cmd"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let result = command.wait_with_output()?;
+
+    if !result.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "cmd returned non-zero status",
+        ));
+    }
+    Ok(result)
+}
+
 fn run(cmd: &str, args: &[&str]) -> Output {
     let result = Command::new(cmd)
         .args(args)
-        .current_dir(env::current_dir().expect("error getting current dir"))
         .output()
         .expect("failed to run git status");
     trace!(
@@ -212,47 +268,6 @@ fn run(cmd: &str, args: &[&str]) -> Output {
         args
     );
     result
-}
-
-#[derive(StructOpt, Debug)]
-#[structopt(
-    name = "gitpr",
-    about = "git repo status for shell prompt",
-    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
-)]
-struct Opt {
-    /// Debug verbosity (ex: -v, -vv, -vvv)
-    #[structopt(
-        short = "v",
-        long = "verbose",
-        // default_value = "2",
-        parse(from_occurrences)
-    )]
-    verbose: u8,
-
-    /// Format print-f style string
-    #[structopt(
-        short = "f",
-        long = "format",
-        default_value = "%g (%b@%c) %a %m%d%u%t %s",
-        long_help = "Tokenized string may contain:
-    %g  branch glyph ()
-    %n  VC name
-    %b  branch
-    %r  remote
-    %a  commits ahead/behind remote
-    %c  current commit hash
-    %m  unstaged changes (modified/added/removed)
-    %s  staged changes (modified/added/removed)
-    %u  untracked files
-    %d  diff lines, ex: \"+20/-10\"
-    %t  stashed files indicator
-"
-    )]
-    format: String,
-
-    #[structopt(short = "d", long = "dir", default_value = ".")]
-    dir: String,
 }
 
 fn main() {
@@ -269,8 +284,11 @@ fn main() {
     env::set_current_dir(&opts.dir).expect("error setting current dir");
     // env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
-    let cmd = run("git", &["status", "--porcelain=2", "--branch"]);
+
+    // TODO: possibly use rev-parse first, kill 2 birds?
+    let cmd = exec("git status --porcelain=2 --branch").expect("git status error");
     let status = str::from_utf8(&cmd.stdout).expect("git status error");
+
     let mut ri = Repo::new();
     ri.parse_status(&status);
 
@@ -304,6 +322,6 @@ fn main() {
     info!("{:#?}", &opts);
     // trace!("{}", &ri.fmt_diff_numstat());
     // trace!("{}", &ri.git_root_dir());
-    trace!("{}", &ri.fmt_stash());
+    // trace!("{}", &ri.fmt_stash());
     println!("{}", &out);
 }
