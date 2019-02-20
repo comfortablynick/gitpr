@@ -27,7 +27,7 @@ struct Opt {
     #[structopt(
         short = "f",
         long = "format",
-        default_value = "%g (%b@%c) %a %m%d%u%t %s",
+        default_value = "%g (%b@%c) %a %m%d %u%t %s",
         long_help = "Tokenized string may contain:
     %g  branch glyph ()
     %n  VC name
@@ -121,10 +121,21 @@ impl Repo {
     }
 
     fn git_root_dir(&mut self) -> String {
-        let cmd = run("git", &["rev-parse", "--absolute-git-dir"]);
+        let cmd = exec("git rev-parse --absolute-git-dir")
+            .expect("error calling `git rev-parse --absolute-git-dir`");
         let output = String::from_utf8(cmd.stdout).ok();
         self.git_dir = output.clone();
         output.unwrap_or_default().trim().to_string()
+    }
+
+    fn git_diff_numstat(&mut self) {
+        let cmd = exec("git diff --numstat").expect("error calling `git diff --numstat`");
+        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
+        for line in output.lines() {
+            let mut split = line.split_whitespace();
+            self.insertions += split.next().unwrap_or_default().parse().unwrap_or(0);
+            self.deletions += split.next().unwrap_or_default().parse().unwrap_or(0);
+        }
     }
 
     /* Parse git status by line */
@@ -155,10 +166,10 @@ impl Repo {
                     self.parse_modified(words.next().unwrap());
                 }
                 if word == "u" {
-                    trace!("Unmerged file: {}", line);
+                    self.unmerged += 1;
                 }
                 if word == "?" {
-                    trace!("Untracked file: {}", line);
+                    self.untracked += 1;
                 }
             }
         }
@@ -198,7 +209,7 @@ impl Repo {
     }
 
     fn fmt_ahead_behind(&self) -> String {
-        let mut out: String = String::new();
+        let mut out = String::new();
         if self.ahead != 0 {
             out.push_str(&format!("{}{}", Repo::AHEAD_GLYPH, self.ahead));
         }
@@ -209,19 +220,34 @@ impl Repo {
     }
 
     fn fmt_diff_numstat(&mut self) -> String {
-        let cmd = run("git", &["diff", "--numstat"]);
-        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
-        output
+        self.git_diff_numstat();
+        let mut out = String::new();
+        if self.insertions + self.deletions != 0 {
+            out.push_str(&format!("+{}/-{}", self.insertions, self.deletions));
+        }
+        out
     }
 
     fn fmt_stash(&mut self) -> String {
+        let mut out = String::new();
         let mut git = match self.git_dir.clone() {
             Some(d) => d,
             None => self.git_root_dir(),
         };
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git).unwrap_or_default();
-        st
+        // TODO: doesn't update self.stashed
+        self.stashed = st.lines().count() as u32;
+        out.push_str(&format!("{}{}", Repo::STASH_GLYPH, self.stashed));
+        out
+    }
+
+    fn fmt_untracked(&self) -> String {
+        let mut out: String = String::new();
+        if self.untracked != 0 {
+            out.push_str(&format!("{}{}", Repo::UNTRACKED_GLYPH, self.untracked));
+        }
+        out
     }
 }
 
@@ -240,37 +266,22 @@ fn exec(cmd: &str) -> io::Result<Output> {
     let command = Command::new(&args[0])
         .args(args.get(1..).expect("missing args in cmd"))
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()?;
     let result = command.wait_with_output()?;
 
     if !result.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "cmd returned non-zero status",
+            str::from_utf8(&result.stderr)
+                .unwrap_or("cmd returned non-zero status")
+                .trim_end(),
         ));
     }
     Ok(result)
 }
 
-fn run(cmd: &str, args: &[&str]) -> Output {
-    let result = Command::new(cmd)
-        .args(args)
-        .output()
-        .expect("failed to run git status");
-    trace!(
-        "Cmd {}: {} {:?}",
-        match result.status.code() {
-            Some(code) => format!("returned {}", code),
-            None => String::from("terminated"),
-        },
-        cmd,
-        args
-    );
-    result
-}
-
-fn main() {
+fn main() -> io::Result<()> {
     let opts = Opt::from_args();
 
     env::set_var(
@@ -281,16 +292,17 @@ fn main() {
             2 | _ => "trace",
         },
     );
-    env::set_current_dir(&opts.dir).expect("error setting current dir");
+    env::set_current_dir(&opts.dir)?;
     // env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
 
     // TODO: possibly use rev-parse first, kill 2 birds?
-    let cmd = exec("git status --porcelain=2 --branch").expect("git status error");
-    let status = str::from_utf8(&cmd.stdout).expect("git status error");
-
+    let git_status = exec("git status --porcelain=2 --branch")?;
     let mut ri = Repo::new();
-    ri.parse_status(&status);
+    ri.parse_status(
+        str::from_utf8(&git_status.stdout)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
+    );
 
     // parse fmt string
     let mut fmt_str = opts.format.chars();
@@ -303,13 +315,13 @@ fn main() {
                     'a' => out.push_str(&ri.fmt_ahead_behind().as_str()),
                     'b' => out.push_str(&ri.fmt_branch().as_str()),
                     'c' => out.push_str(&ri.fmt_commit(7).as_str()),
-                    'd' => trace!("show diff"),
+                    'd' => out.push_str(&ri.fmt_diff_numstat().as_str()),
                     'g' => out.push(Repo::BRANCH_GLYPH),
                     'm' => out.push_str(&ri.unstaged.fmt_modified().as_str()),
                     'n' => out.push_str("git"),
                     's' => out.push_str(&ri.staged.fmt_modified().as_str()),
                     't' => trace!("show stashed"),
-                    'u' => trace!("show untracked"),
+                    'u' => out.push_str(&ri.fmt_untracked().as_str()),
                     '%' => out.push('%'),
                     &c => panic!("Invalid flag: \"%{}\"", &c),
                 }
@@ -320,8 +332,8 @@ fn main() {
     }
     info!("{:#?}", &ri);
     info!("{:#?}", &opts);
-    // trace!("{}", &ri.fmt_diff_numstat());
-    // trace!("{}", &ri.git_root_dir());
-    // trace!("{}", &ri.fmt_stash());
+    trace!("{}", &ri.fmt_stash());
+
     println!("{}", &out);
+    Ok(())
 }
