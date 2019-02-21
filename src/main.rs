@@ -235,10 +235,14 @@ impl Repo {
             None => self.git_root_dir(),
         };
         git.push_str("/logs/refs/stash");
-        let st = std::fs::read_to_string(git).unwrap_or_default();
-        // TODO: doesn't update self.stashed
-        self.stashed = st.lines().count() as u32;
-        out.push_str(&format!("{}{}", Repo::STASH_GLYPH, self.stashed));
+        let st = std::fs::read_to_string(git)
+            .unwrap_or_default()
+            .lines()
+            .count();
+        if st > 0 {
+            self.stashed = st as u32;
+            out.push_str(&format!("{}{}", Repo::STASH_GLYPH, st));
+        }
         out
     }
 
@@ -320,7 +324,7 @@ fn main() -> io::Result<()> {
                     'm' => out.push_str(&ri.unstaged.fmt_modified().as_str()),
                     'n' => out.push_str("git"),
                     's' => out.push_str(&ri.staged.fmt_modified().as_str()),
-                    't' => trace!("show stashed"),
+                    't' => out.push_str(&ri.fmt_stash().as_str()),
                     'u' => out.push_str(&ri.fmt_untracked().as_str()),
                     '%' => out.push('%'),
                     &c => panic!("Invalid flag: \"%{}\"", &c),
@@ -330,9 +334,8 @@ fn main() -> io::Result<()> {
             out.push(c);
         }
     }
-    info!("{:#?}", &ri);
+    trace!("{:#?}", &ri);
     info!("{:#?}", &opts);
-    trace!("{}", &ri.fmt_stash());
 
     println!("{}", &out);
     Ok(())
