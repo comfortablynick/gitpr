@@ -27,7 +27,8 @@ struct Opt {
     #[structopt(
         short = "f",
         long = "format",
-        default_value = "%g (%b@%c) %a %m%d %u%t %s",
+        // default_value = "%g (%b@%c) %a %m%d %u%t %s",
+        default_value = "%g %b@%c %a %m %u %s",
         long_help = "Tokenized string may contain:
     %g  branch glyph ()
     %n  VC name
@@ -144,53 +145,33 @@ impl Repo {
             let mut words = line.split_whitespace();
             // scan by word
             while let Some(word) = words.next() {
-                if word == "#" {
-                    while let Some(br) = words.next() {
-                        if br == "branch.oid" {
-                            self.commit = words.next().map(String::from);
-                        }
-                        if br == "branch.head" {
-                            self.branch = words.next().map(String::from);
-                        }
-                        if br == "branch.upstream" {
-                            self.upstream = words.next().map(String::from);
-                        }
-                        if br == "branch.ab" {
-                            self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
-                            self.behind = words.next().map_or(0, |s| s[1..].parse().unwrap());
+                match word {
+                    "#" => {
+                        while let Some(br) = words.next() {
+                            match br {
+                                "branch.oid" => self.commit = words.next().map(String::from),
+                                "branch.head" => self.branch = words.next().map(String::from),
+                                "branch.upstream" => self.upstream = words.next().map(String::from),
+                                "branch.ab" => {
+                                    self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
+                                    self.behind =
+                                        words.next().map_or(0, |s| s[1..].parse().unwrap());
+                                }
+                                _ => (),
+                            }
                         }
                     }
-                }
-                // Tracked file
-                if word == "1" || word == "2" {
-                    self.parse_modified(words.next().unwrap());
-                }
-                if word == "u" {
-                    self.unmerged += 1;
-                }
-                if word == "?" {
-                    self.untracked += 1;
+                    // Tracked file
+                    "1" | "2" => {
+                        let mut code = words.next().unwrap().chars();
+                        self.staged.parse_modified(code.next().unwrap());
+                        self.unstaged.parse_modified(code.next().unwrap());
+                    }
+                    "u" => self.unmerged += 1,
+                    "?" => self.untracked += 1,
+                    _ => (),
                 }
             }
-        }
-    }
-
-    fn parse_modified(&mut self, ln: &str) -> () {
-        match &ln[..1] {
-            "M" => self.staged.modified += 1,
-            "A" => self.staged.added += 1,
-            "D" => self.staged.deleted += 1,
-            "R" => self.staged.renamed += 1,
-            "C" => self.staged.copied += 1,
-            _ => (),
-        }
-        match &ln[1..] {
-            "M" => self.unstaged.modified += 1,
-            "A" => self.unstaged.added += 1,
-            "D" => self.unstaged.deleted += 1,
-            "R" => self.unstaged.renamed += 1,
-            "C" => self.unstaged.copied += 1,
-            _ => (),
         }
     }
 
@@ -203,7 +184,12 @@ impl Repo {
 
     fn fmt_commit(&self, len: usize) -> String {
         match &self.commit {
-            Some(s) => s[..len].to_string(),
+            Some(s) => {
+                if s == "(initial)" {
+                    return s.to_string();
+                }
+                return s[..len].to_string();
+            }
             None => String::new(),
         }
     }
@@ -256,6 +242,17 @@ impl Repo {
 }
 
 impl GitArea {
+    fn parse_modified(&mut self, ln: char) -> () {
+        match ln {
+            'M' => self.modified += 1,
+            'A' => self.added += 1,
+            'D' => self.deleted += 1,
+            'R' => self.renamed += 1,
+            'C' => self.copied += 1,
+            _ => (),
+        }
+    }
+
     fn fmt_modified(&self) -> String {
         let mut out: String = String::new();
         if self.modified != 0 {
@@ -297,7 +294,6 @@ fn main() -> io::Result<()> {
         },
     );
     env::set_current_dir(&opts.dir)?;
-    // env::set_var("RUST_BACKTRACE", "1");
     env_logger::init();
 
     // TODO: possibly use rev-parse first, kill 2 birds?

@@ -1,0 +1,11 @@
+edition = "2018"
+version = "Two"
+unstable_features = true
+
+format_strings = true
+merge_imports = true
+merge_derives = true
+newline_style = "Unix"
+reorder_impl_items = true
+use_field_init_shorthand = true
+use_try_shorthand = true
