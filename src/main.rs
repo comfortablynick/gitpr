@@ -1,3 +1,4 @@
+use colored::*;
 use log::{info, trace};
 use std::{
     env, io,
@@ -47,6 +48,18 @@ struct Opt {
 
     #[structopt(short = "d", long = "dir", default_value = ".")]
     dir: String,
+    // Options from format string
+    show_ahead_behind: bool,
+    show_branch: bool,
+    show_branch_glyph: bool,
+    show_commit: bool,
+    show_diff: bool,
+    show_remote: bool,
+    show_stashed: bool,
+    show_staged_modified: bool,
+    show_unstaged_modified: bool,
+    show_untracked: bool,
+    show_vcs: bool,
 }
 
 #[derive(Debug)]
@@ -239,6 +252,16 @@ impl Repo {
         }
         out
     }
+
+    fn fmt_clean_dirty(&self, s: String) -> String {
+        if self.unstaged.has_changed() {
+            return s.red().to_string();
+        }
+        if self.staged.has_changed() {
+            return s.yellow().to_string();
+        }
+        s.green().to_string()
+    }
 }
 
 impl GitArea {
@@ -259,6 +282,10 @@ impl GitArea {
             out.push_str(&format!("{}{}", Repo::MODIFIED_GLYPH, self.modified));
         }
         out
+    }
+
+    fn has_changed(&self) -> bool {
+        self.added + self.deleted + self.modified + self.copied + self.renamed != 0
     }
 }
 
@@ -282,8 +309,40 @@ fn exec(cmd: &str) -> io::Result<Output> {
     Ok(result)
 }
 
+fn print_output(mut ri: Repo, opts: Opt) -> () {
+    // parse fmt string
+    let mut fmt_str = opts.format.chars();
+    let mut out: String = String::new();
+    while let Some(c) = fmt_str.next() {
+        if c == '%' {
+            if let Some(c) = fmt_str.next() {
+                match &c {
+                    'a' => out.push_str(&ri.fmt_ahead_behind().as_str()),
+                    'b' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_branch()).as_str()),
+                    'c' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_commit(7)).as_str()),
+                    'd' => {
+                        let s = ri.fmt_diff_numstat();
+                        out.push_str(ri.fmt_clean_dirty(s).as_str());
+                    }
+                    'g' => out.push(Repo::BRANCH_GLYPH),
+                    'm' => out.push_str(&ri.fmt_clean_dirty(ri.unstaged.fmt_modified()).as_str()),
+                    'n' => out.push_str("git"),
+                    's' => out.push_str(&ri.fmt_clean_dirty(ri.staged.fmt_modified()).as_str()),
+                    't' => out.push_str(&ri.fmt_stash().yellow().to_string()),
+                    'u' => out.push_str(&ri.fmt_untracked().blue().to_string()),
+                    '%' => out.push('%'),
+                    &c => panic!("print_output: invalid flag: \"%{}\"", &c),
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    println!("{}", out);
+}
+
 fn main() -> io::Result<()> {
-    let opts = Opt::from_args();
+    let mut opts = Opt::from_args();
 
     env::set_var(
         "RUST_LOG",
@@ -306,33 +365,28 @@ fn main() -> io::Result<()> {
 
     // parse fmt string
     let mut fmt_str = opts.format.chars();
-    let mut out: String = String::new();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match &c {
-                    ' ' => out.push(' '),
-                    'a' => out.push_str(&ri.fmt_ahead_behind().as_str()),
-                    'b' => out.push_str(&ri.fmt_branch().as_str()),
-                    'c' => out.push_str(&ri.fmt_commit(7).as_str()),
-                    'd' => out.push_str(&ri.fmt_diff_numstat().as_str()),
-                    'g' => out.push(Repo::BRANCH_GLYPH),
-                    'm' => out.push_str(&ri.unstaged.fmt_modified().as_str()),
-                    'n' => out.push_str("git"),
-                    's' => out.push_str(&ri.staged.fmt_modified().as_str()),
-                    't' => out.push_str(&ri.fmt_stash().as_str()),
-                    'u' => out.push_str(&ri.fmt_untracked().as_str()),
-                    '%' => out.push('%'),
+                    'a' => opts.show_ahead_behind = true,
+                    'b' => opts.show_branch = true,
+                    'c' => opts.show_commit = true,
+                    'd' => opts.show_diff = true,
+                    'g' => opts.show_branch_glyph = true,
+                    'm' => opts.show_unstaged_modified = true,
+                    'n' => opts.show_vcs = true,
+                    's' => opts.show_staged_modified = true,
+                    't' => opts.show_stashed = true,
+                    'u' => opts.show_untracked = true,
+                    '%' => continue,
                     &c => panic!("Invalid flag: \"%{}\"", &c),
                 }
             }
-        } else {
-            out.push(c);
         }
     }
     trace!("{:#?}", &ri);
     info!("{:#?}", &opts);
-
-    println!("{}", &out);
+    print_output(ri, opts);
     Ok(())
 }
