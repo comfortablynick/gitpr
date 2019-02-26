@@ -278,14 +278,18 @@ impl GitArea {
 
     fn fmt_modified(&self) -> String {
         let mut out: String = String::new();
-        if self.modified != 0 {
-            out.push_str(&format!("{}{}", Repo::MODIFIED_GLYPH, self.modified));
+        if self.has_changed() {
+            out.push_str(&format!("{}{}", Repo::MODIFIED_GLYPH, self.change_ct()));
         }
         out
     }
 
     fn has_changed(&self) -> bool {
         self.added + self.deleted + self.modified + self.copied + self.renamed != 0
+    }
+
+    fn change_ct(&self) -> u32 {
+        self.added + self.deleted + self.modified + self.copied + self.renamed
     }
 }
 
