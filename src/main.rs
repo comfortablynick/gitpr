@@ -8,13 +8,29 @@ use std::{
 };
 use structopt::StructOpt;
 
+/// Options from format string
+#[derive(Debug, Default)]
+struct Opt {
+    show_ahead_behind: bool,
+    show_branch: bool,
+    show_branch_glyph: bool,
+    show_commit: bool,
+    show_diff: bool,
+    show_remote: bool,
+    show_stashed: bool,
+    show_staged_modified: bool,
+    show_unstaged_modified: bool,
+    show_untracked: bool,
+    show_vcs: bool,
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "gitpr",
     about = "git repo status for shell prompt",
     raw(setting = "structopt::clap::AppSettings::ColoredHelp")
 )]
-struct Opt {
+struct Arg {
     /// Debug verbosity (ex: -v, -vv, -vvv)
     #[structopt(
         short = "v",
@@ -48,18 +64,6 @@ struct Opt {
 
     #[structopt(short = "d", long = "dir", default_value = ".")]
     dir: String,
-    // Options from format string
-    show_ahead_behind: bool,
-    show_branch: bool,
-    show_branch_glyph: bool,
-    show_commit: bool,
-    show_diff: bool,
-    show_remote: bool,
-    show_stashed: bool,
-    show_staged_modified: bool,
-    show_unstaged_modified: bool,
-    show_untracked: bool,
-    show_vcs: bool,
 }
 
 #[derive(Debug)]
@@ -313,9 +317,9 @@ fn exec(cmd: &str) -> io::Result<Output> {
     Ok(result)
 }
 
-fn print_output(mut ri: Repo, opts: Opt) -> () {
+fn print_output(mut ri: Repo, args: Arg) -> () {
     // parse fmt string
-    let mut fmt_str = opts.format.chars();
+    let mut fmt_str = args.format.chars();
     let mut out: String = String::new();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
@@ -346,17 +350,18 @@ fn print_output(mut ri: Repo, opts: Opt) -> () {
 }
 
 fn main() -> io::Result<()> {
-    let mut opts = Opt::from_args();
+    let args = Arg::from_args();
+    let mut opts: Opt = Default::default();
 
     env::set_var(
         "RUST_LOG",
-        match &opts.verbose {
+        match &args.verbose {
             0 => "warning",
             1 => "info",
             2 | _ => "trace",
         },
     );
-    env::set_current_dir(&opts.dir)?;
+    env::set_current_dir(&args.dir)?;
     env_logger::init();
 
     // TODO: possibly use rev-parse first, kill 2 birds?
@@ -368,7 +373,7 @@ fn main() -> io::Result<()> {
     );
 
     // parse fmt string
-    let mut fmt_str = opts.format.chars();
+    let mut fmt_str = args.format.chars();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
@@ -390,7 +395,7 @@ fn main() -> io::Result<()> {
         }
     }
     trace!("{:#?}", &ri);
-    info!("{:#?}", &opts);
-    print_output(ri, opts);
+    info!("{:#?}", &args);
+    print_output(ri, args);
     Ok(())
 }
