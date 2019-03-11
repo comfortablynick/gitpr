@@ -205,7 +205,7 @@ impl Repo {
                 if s == "(initial)" {
                     return s.to_string();
                 }
-                return s[..len].to_string();
+                s[..len].to_string()
             }
             None => String::new(),
         }
@@ -269,7 +269,7 @@ impl Repo {
 }
 
 impl GitArea {
-    fn parse_modified(&mut self, ln: char) -> () {
+    fn parse_modified(&mut self, ln: char) {
         match ln {
             'M' => self.modified += 1,
             'A' => self.added += 1,
@@ -317,7 +317,7 @@ fn exec(cmd: &str) -> io::Result<Output> {
     Ok(result)
 }
 
-fn print_output(mut ri: Repo, args: Arg) -> () {
+fn print_output(mut ri: Repo, args: Arg) {
     // parse fmt string
     let mut fmt_str = args.format.chars();
     let mut out: String = String::new();
