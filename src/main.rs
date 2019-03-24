@@ -40,6 +40,10 @@ struct Arg {
     )]
     verbose: u8,
 
+    /// Disable colored output
+    #[structopt(short = "n", long = "no-color")]
+    no_color: bool,
+
     /// Format print-f style string
     #[structopt(
         short = "f",
@@ -361,6 +365,11 @@ fn main() -> io::Result<()> {
             2 | _ => "trace",
         },
     );
+
+    if args.no_color {
+        colored::control::set_override(false);
+    };
+
     env::set_current_dir(&args.dir)?;
     env_logger::init();
 
