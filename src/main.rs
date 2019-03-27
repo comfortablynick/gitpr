@@ -359,8 +359,10 @@ fn print_output(mut ri: Repo, args: Arg) {
                     'b' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_branch()).as_str()),
                     'c' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_commit(7)).as_str()),
                     'd' => {
-                        let s = ri.fmt_diff_numstat();
-                        out.push_str(ri.fmt_clean_dirty(s).as_str());
+                        if ri.unstaged.has_changed() {
+                            let s = ri.fmt_diff_numstat();
+                            out.push_str(ri.fmt_clean_dirty(s).as_str());
+                        }
                     }
                     'g' => out.push(Repo::BRANCH_GLYPH),
                     'm' => out.push_str(
@@ -413,6 +415,7 @@ fn main() -> io::Result<()> {
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
     );
 
+    // TODO: use env vars for format str and glyphs
     // parse fmt string
     let mut fmt_str = args.format.chars();
     while let Some(c) = fmt_str.next() {
