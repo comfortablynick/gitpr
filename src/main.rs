@@ -40,6 +40,12 @@ struct Arg {
     )]
     verbose: u8,
 
+    /// Show indicators instead of numeric values.
+    ///
+    /// Does not apply to '%d' (diff), which always uses numeric values
+    #[structopt(short = "i", long = "indicators-only")]
+    indicators_only: bool,
+
     /// Disable colored output
     #[structopt(short = "n", long = "no-color")]
     no_color: bool,
@@ -215,13 +221,19 @@ impl Repo {
         }
     }
 
-    fn fmt_ahead_behind(&self) -> String {
+    fn fmt_ahead_behind(&self, indicators_only: bool) -> String {
         let mut out = String::new();
         if self.ahead != 0 {
-            out.push_str(&format!("{}{}", Repo::AHEAD_GLYPH, self.ahead));
+            out.push(Repo::AHEAD_GLYPH);
+            if !indicators_only {
+                out.push_str(&self.ahead.to_string());
+            }
         }
         if self.behind != 0 {
-            out.push_str(&format!("{}{}", Repo::BEHIND_GLYPH, self.behind));
+            out.push(Repo::BEHIND_GLYPH);
+            if !indicators_only {
+                out.push_str(&self.behind.to_string());
+            }
         }
         out
     }
@@ -229,8 +241,15 @@ impl Repo {
     fn fmt_diff_numstat(&mut self) -> String {
         self.git_diff_numstat();
         let mut out = String::new();
-        if self.insertions + self.deletions != 0 {
-            out.push_str(&format!("+{}/-{}", self.insertions, self.deletions));
+        if self.insertions > 0 {
+            out.push_str("+");
+            out.push_str(&self.insertions.to_string());
+            if self.deletions > 0 {
+                out.push_str("/");
+            }
+            if self.deletions > 0 {
+                out.push_str(&self.deletions.to_string());
+            }
         }
         out
     }
@@ -248,15 +267,19 @@ impl Repo {
             .count();
         if st > 0 {
             self.stashed = st as u32;
-            out.push_str(&format!("{}{}", Repo::STASH_GLYPH, st));
+            out.push(Repo::STASH_GLYPH);
+            out.push_str(&st.to_string());
         }
         out
     }
 
-    fn fmt_untracked(&self) -> String {
+    fn fmt_untracked(&self, indicators_only: bool) -> String {
         let mut out: String = String::new();
         if self.untracked != 0 {
-            out.push_str(&format!("{}{}", Repo::UNTRACKED_GLYPH, self.untracked));
+            out.push(Repo::UNTRACKED_GLYPH);
+            if !indicators_only {
+                out.push_str(&self.untracked.to_string());
+            }
         }
         out
     }
@@ -284,10 +307,13 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self) -> String {
+    fn fmt_modified(&self, indicators_only: bool) -> String {
         let mut out: String = String::new();
         if self.has_changed() {
-            out.push_str(&format!("{}{}", Repo::MODIFIED_GLYPH, self.change_ct()));
+            out.push(Repo::MODIFIED_GLYPH);
+            if !indicators_only {
+                out.push_str(&self.change_ct().to_string());
+            }
         }
         out
     }
@@ -329,7 +355,7 @@ fn print_output(mut ri: Repo, args: Arg) {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match &c {
-                    'a' => out.push_str(&ri.fmt_ahead_behind().as_str()),
+                    'a' => out.push_str(&ri.fmt_ahead_behind(args.indicators_only).as_str()),
                     'b' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_branch()).as_str()),
                     'c' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_commit(7)).as_str()),
                     'd' => {
@@ -337,11 +363,17 @@ fn print_output(mut ri: Repo, args: Arg) {
                         out.push_str(ri.fmt_clean_dirty(s).as_str());
                     }
                     'g' => out.push(Repo::BRANCH_GLYPH),
-                    'm' => out.push_str(&ri.fmt_clean_dirty(ri.unstaged.fmt_modified()).as_str()),
+                    'm' => out.push_str(
+                        &ri.fmt_clean_dirty(ri.unstaged.fmt_modified(args.indicators_only))
+                            .as_str(),
+                    ),
                     'n' => out.push_str("git"),
-                    's' => out.push_str(&ri.fmt_clean_dirty(ri.staged.fmt_modified()).as_str()),
+                    's' => out.push_str(
+                        &ri.fmt_clean_dirty(ri.staged.fmt_modified(args.indicators_only))
+                            .as_str(),
+                    ),
                     't' => out.push_str(&ri.fmt_stash().yellow().to_string()),
-                    'u' => out.push_str(&ri.fmt_untracked().blue().to_string()),
+                    'u' => out.push_str(&ri.fmt_untracked(args.indicators_only).blue().to_string()),
                     '%' => out.push('%'),
                     &c => panic!("print_output: invalid flag: \"%{}\"", &c),
                 }
