@@ -251,7 +251,7 @@ impl Repo {
         out
     }
 
-    fn fmt_stash(&mut self) -> String {
+    fn fmt_stash(&mut self, indicators_only: bool) -> String {
         let mut out = String::new();
         let mut git = match self.git_dir.clone() {
             Some(d) => d,
@@ -265,7 +265,9 @@ impl Repo {
         if st > 0 {
             self.stashed = st as u32;
             out.push(Repo::STASH_GLYPH);
-            out.push_str(&st.to_string());
+            if !indicators_only {
+                out.push_str(&st.to_string());
+            }
         }
         out
     }
@@ -372,7 +374,7 @@ fn print_output(mut ri: Repo, args: Arg) {
                         &ri.fmt_clean_dirty(ri.staged.fmt_modified(args.indicators_only))
                             .as_str(),
                     ),
-                    't' => out.push_str(&ri.fmt_stash().yellow().to_string()),
+                    't' => out.push_str(&ri.fmt_stash(args.indicators_only).yellow().to_string()),
                     'u' => out.push_str(&ri.fmt_untracked(args.indicators_only).blue().to_string()),
                     '%' => out.push('%'),
                     &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
