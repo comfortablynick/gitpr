@@ -71,6 +71,7 @@ struct Arg {
     dir: String,
 }
 
+/// Hold status of git repo attributes
 #[derive(Debug)]
 struct Repo {
     working_dir: Option<PathBuf>,
@@ -90,6 +91,7 @@ struct Repo {
     staged: GitArea,
 }
 
+/// Hold status of specific git area (staged, unstaged)
 #[derive(Debug)]
 struct GitArea {
     modified: u32,
@@ -161,7 +163,7 @@ impl Repo {
         }
     }
 
-    /* Parse git status by line */
+    /// Parse git status by line
     fn parse_status(&mut self, gs: &str) {
         for line in gs.lines() {
             let mut words = line.split_whitespace();
@@ -322,6 +324,7 @@ impl GitArea {
     }
 }
 
+/// Spawn subprocess for `cmd` and access stdout/stderr
 fn exec(cmd: &str) -> io::Result<Output> {
     let args: Vec<&str> = cmd.split_whitespace().collect();
     let command = Command::new(&args[0])
@@ -342,8 +345,8 @@ fn exec(cmd: &str) -> io::Result<Output> {
     Ok(result)
 }
 
+/// Print output based on parsing of --format string
 fn print_output(mut ri: Repo, args: Arg) {
-    // parse fmt string
     let mut fmt_str = args.format.chars();
     let mut out: String = String::new();
     while let Some(c) = fmt_str.next() {
@@ -372,13 +375,14 @@ fn print_output(mut ri: Repo, args: Arg) {
                     't' => out.push_str(&ri.fmt_stash().yellow().to_string()),
                     'u' => out.push_str(&ri.fmt_untracked(args.indicators_only).blue().to_string()),
                     '%' => out.push('%'),
-                    &c => panic!("print_output: invalid flag: \"%{}\"", &c),
+                    &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
                 }
             }
         } else {
             out.push(c);
         }
     }
+    out = out.split("  ").collect();
     println!("{}", out);
 }
 
