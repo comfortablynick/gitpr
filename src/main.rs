@@ -3,10 +3,22 @@ use log::{info, trace};
 use std::{
     env, io,
     path::PathBuf,
-    process::{Command, Output, Stdio},
+    process::{self, Command, Output, Stdio},
     str,
 };
 use structopt::StructOpt;
+const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
+    %g  branch glyph ()
+    %n  VC name
+    %b  branch
+    %r  remote
+    %a  commits ahead/behind remote
+    %c  current commit hash
+    %m  unstaged changes (modified/added/removed)
+    %s  staged changes (modified/added/removed)
+    %u  untracked files
+    %d  diff lines, ex: \"+20/-10\"
+    %t  stashed files indicator";
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -25,11 +37,7 @@ struct Opt {
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(
-    name = "gitpr",
-    about = "git repo status for shell prompt",
-    raw(setting = "structopt::clap::AppSettings::ColoredHelp")
-)]
+#[structopt(name = "gitpr", about = "git repo status for shell prompt")]
 struct Arg {
     /// Debug verbosity (ex: -v, -vv, -vvv)
     #[structopt(
@@ -54,21 +62,8 @@ struct Arg {
     #[structopt(
         short = "f",
         long = "format",
-        // default_value = "%g (%b@%c) %a %m%d %u%t %s",
         default_value = "%g %b@%c %a %m %u %s",
-        long_help = "Tokenized string may contain:
-    %g  branch glyph ()
-    %n  VC name
-    %b  branch
-    %r  remote
-    %a  commits ahead/behind remote
-    %c  current commit hash
-    %m  unstaged changes (modified/added/removed)
-    %s  staged changes (modified/added/removed)
-    %u  untracked files
-    %d  diff lines, ex: \"+20/-10\"
-    %t  stashed files indicator
-"
+        raw(long_help = "FORMAT_STRING_USAGE")
     )]
     format: String,
 
@@ -433,7 +428,13 @@ fn main() -> io::Result<()> {
                     't' => opts.show_stashed = true,
                     'u' => opts.show_untracked = true,
                     '%' => continue,
-                    &c => panic!("Invalid flag: \"%{}\"", &c),
+                    &c => {
+                        eprintln!(
+                            "Invalid format string token: '%{}'\n{}",
+                            &c, FORMAT_STRING_USAGE
+                        );
+                        process::exit(1);
+                    }
                 }
             }
         }
