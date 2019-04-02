@@ -384,8 +384,8 @@ fn print_output(mut ri: Repo, args: Arg) {
             out.push(c);
         }
     }
-    out = out.split("  ").collect();
-    println!("{}", out);
+    // out = out.split("  ").collect();
+    println!("{}", out.trim_end());
 }
 
 fn main() -> io::Result<()> {
