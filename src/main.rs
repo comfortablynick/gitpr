@@ -356,12 +356,11 @@ fn print_output(mut ri: Repo, args: Arg) {
             if let Some(c) = fmt_str.next() {
                 match &c {
                     'a' => out.push_str(&ri.fmt_ahead_behind(args.indicators_only).as_str()),
-                    'b' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_branch()).as_str()),
-                    'c' => out.push_str(&ri.fmt_clean_dirty(ri.fmt_commit(7)).as_str()),
+                    'b' => out.push_str(ri.fmt_branch().bright_cyan().to_string().as_str()),
+                    'c' => out.push_str(ri.fmt_commit(7).black().on_green().to_string().as_str()),
                     'd' => {
                         if ri.unstaged.has_changed() {
-                            let s = ri.fmt_diff_numstat();
-                            out.push_str(ri.fmt_clean_dirty(s).as_str());
+                            out.push_str(ri.fmt_diff_numstat().as_str());
                         }
                     }
                     'g' => out.push(Repo::BRANCH_GLYPH),
