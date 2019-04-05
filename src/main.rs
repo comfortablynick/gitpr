@@ -8,6 +8,9 @@ use std::{
 };
 use structopt::StructOpt;
 
+mod util;
+use util::AppError;
+
 // Constants + globals
 const PROG: &str = env!("CARGO_PKG_NAME");
 const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
@@ -22,7 +25,7 @@ const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
     %u  untracked files
     %d  diff lines, ex: \"+20/-10\"
     %t  stashed files indicator";
-pub type AnyError = Box<dyn std::error::Error + 'static>;
+// type AnyError = Box<dyn std::error::Error + 'static>;
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -44,11 +47,7 @@ struct Opt {
 #[structopt(raw(name = "PROG"), about = "git repo status for shell prompt")]
 struct Arg {
     /// Debug verbosity (ex: -v, -vv, -vvv)
-    #[structopt(
-        short = "v",
-        long = "verbose",
-        parse(from_occurrences)
-    )]
+    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
     verbose: u8,
 
     /// Show indicators instead of numeric values.
@@ -67,6 +66,12 @@ struct Arg {
     #[structopt(short = "s", long = "simple")]
     simple_mode: bool,
 
+    /// Test simple mode (similar to factory git prompt)
+    ///
+    /// Does not accept format string (-f, --format)
+    #[structopt(short = "t", long = "test-simple")]
+    test_simple_mode: bool,
+
     /// Format print-f style string
     #[structopt(
         short = "f",
@@ -78,7 +83,6 @@ struct Arg {
 
     /// Directory to check for status, if not current dir
     #[structopt(short = "d", long = "dir")]
-    // dir: String,
     dir: Option<PathBuf>,
 }
 
@@ -89,6 +93,7 @@ struct Repo {
     git_base_dir: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
+    tag: Option<String>,
     remote: Option<String>,
     upstream: Option<String>,
     stashed: u32,
@@ -130,6 +135,7 @@ impl Repo {
             git_base_dir: None,
             branch: None,
             commit: None,
+            tag: None,
             remote: None,
             upstream: None,
             stashed: 0,
@@ -173,8 +179,6 @@ impl Repo {
             self.deletions += split.next().unwrap_or_default().parse().unwrap_or(0);
         }
     }
-
-
 
     /// Parse git status by line
     fn parse_status(&mut self, gs: &str) {
@@ -339,6 +343,16 @@ impl GitArea {
     }
 }
 
+/// Query for git tag, use in simple or regular options
+fn git_tag() -> Result<String, AppError> {
+    let cmd = Command::new("git")
+        .args(&["describe", "--tags", "--exact-match"])
+        .output()?
+        .stdout;
+    let tag = str::from_utf8(&cmd)?.to_string();
+    Ok(tag)
+}
+
 /// Spawn subprocess for `cmd` and access stdout/stderr
 fn exec(cmd: &str) -> io::Result<Output> {
     let args: Vec<&str> = cmd.split_whitespace().collect();
@@ -358,6 +372,44 @@ fn exec(cmd: &str) -> io::Result<Output> {
         ));
     }
     Ok(result)
+}
+
+fn print_simple_output() -> Result<(), AppError> {
+    let branch =
+        String::from(str::from_utf8(&exec("git symbolic-ref --short HEAD")?.stdout)?.trim_end());
+    let mut br_out = String::from("(");
+    br_out.push_str(branch.as_str());
+    br_out.push(')');
+    let clean = Command::new("git")
+        .args(&["diff-index", "--quiet", "HEAD"])
+        .status()?
+        .success();
+    if !clean {
+        println!("{}{}", br_out.bright_cyan(), "*".red());
+    } else {
+        println!("{}", br_out.bright_cyan());
+    }
+    Ok(())
+}
+
+fn print_test_simple_output() -> Result<(), AppError> {
+    let status_cmd = Command::new("git")
+        .args(&["status", "--porcelain", "--branch", "--untracked-files=no"])
+        .output()?
+        .stdout;
+    let status = str::from_utf8(&status_cmd)?;
+    let mut branch = "";
+    let mut dirty = false;
+    for line in status.lines() {
+        if line.starts_with("##") {
+            branch = &line[2..];
+        } else {
+            dirty = true;
+            break;
+        }
+    }
+    println!("Branch: {}\nDirty: {}\nTag: {}", branch, dirty, git_tag()?);
+    Ok(())
 }
 
 /// Print output based on parsing of --format string
@@ -400,7 +452,7 @@ fn print_output(mut ri: Repo, args: Arg) {
     println!("{}", out.trim_end());
 }
 
-fn main() -> Result<(), AnyError> {
+fn main() -> Result<(), AppError> {
     let args = Arg::from_args();
     let mut opts: Opt = Default::default();
 
@@ -425,17 +477,11 @@ fn main() -> Result<(), AnyError> {
     env_logger::init();
 
     if args.simple_mode {
-        let branch = String::from(str::from_utf8(&exec("git symbolic-ref --short HEAD")?.stdout)?.trim_end());
-        let mut br_out = String::from("(");
-        br_out.push_str(branch.as_str());
-        br_out.push(')');
-        let clean = Command::new("git").args(&["diff", "--quiet"]).status()?.success();
-        if !clean {
-            println!("{}{}", br_out.bright_cyan(), "*".red());
-        } else {
-            println!("{}", br_out.bright_cyan());
-        }
-        return Ok(());
+        return print_simple_output();
+    }
+
+    if args.test_simple_mode {
+        return print_test_simple_output();
     }
 
     // TODO: use env vars for format str and glyphs
