@@ -7,6 +7,9 @@ use std::{
     str,
 };
 use structopt::StructOpt;
+
+// Constants + globals
+const PROG: &str = env!("CARGO_PKG_NAME");
 const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
     %g  branch glyph ()
     %n  VC name
@@ -19,6 +22,7 @@ const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
     %u  untracked files
     %d  diff lines, ex: \"+20/-10\"
     %t  stashed files indicator";
+pub type AnyError = Box<dyn std::error::Error + 'static>;
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -37,13 +41,12 @@ struct Opt {
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(name = "gitpr", about = "git repo status for shell prompt")]
+#[structopt(raw(name = "PROG"), about = "git repo status for shell prompt")]
 struct Arg {
     /// Debug verbosity (ex: -v, -vv, -vvv)
     #[structopt(
         short = "v",
         long = "verbose",
-        // default_value = "2",
         parse(from_occurrences)
     )]
     verbose: u8,
@@ -58,6 +61,12 @@ struct Arg {
     #[structopt(short = "n", long = "no-color")]
     no_color: bool,
 
+    /// Simple mode (similar to factory git prompt)
+    ///
+    /// Does not accept format string (-f, --format)
+    #[structopt(short = "s", long = "simple")]
+    simple_mode: bool,
+
     /// Format print-f style string
     #[structopt(
         short = "f",
@@ -67,15 +76,17 @@ struct Arg {
     )]
     format: String,
 
-    #[structopt(short = "d", long = "dir", default_value = ".")]
-    dir: String,
+    /// Directory to check for status, if not current dir
+    #[structopt(short = "d", long = "dir")]
+    // dir: String,
+    dir: Option<PathBuf>,
 }
 
 /// Hold status of git repo attributes
 #[derive(Debug)]
 struct Repo {
     working_dir: Option<PathBuf>,
-    git_dir: Option<String>,
+    git_base_dir: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
     remote: Option<String>,
@@ -115,8 +126,8 @@ impl Repo {
 
     fn new() -> Repo {
         Repo {
-            working_dir: env::current_dir().ok(),
-            git_dir: None,
+            working_dir: None,
+            git_base_dir: None,
             branch: None,
             commit: None,
             remote: None,
@@ -149,7 +160,7 @@ impl Repo {
         let cmd = exec("git rev-parse --absolute-git-dir")
             .expect("error calling `git rev-parse --absolute-git-dir`");
         let output = String::from_utf8(cmd.stdout).ok();
-        self.git_dir = output.clone();
+        self.git_base_dir = output.clone();
         output.unwrap_or_default().trim().to_string()
     }
 
@@ -162,6 +173,8 @@ impl Repo {
             self.deletions += split.next().unwrap_or_default().parse().unwrap_or(0);
         }
     }
+
+
 
     /// Parse git status by line
     fn parse_status(&mut self, gs: &str) {
@@ -253,7 +266,7 @@ impl Repo {
 
     fn fmt_stash(&mut self, indicators_only: bool) -> String {
         let mut out = String::new();
-        let mut git = match self.git_dir.clone() {
+        let mut git = match self.git_base_dir.clone() {
             Some(d) => d,
             None => self.git_root_dir(),
         };
@@ -387,7 +400,7 @@ fn print_output(mut ri: Repo, args: Arg) {
     println!("{}", out.trim_end());
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<(), AnyError> {
     let args = Arg::from_args();
     let mut opts: Opt = Default::default();
 
@@ -404,16 +417,26 @@ fn main() -> io::Result<()> {
         colored::control::set_override(false);
     };
 
-    env::set_current_dir(&args.dir)?;
+    // env::set_current_dir(&args.dir)?;
+    if let Some(d) = &args.dir {
+        env::set_current_dir(d)?;
+    };
+
     env_logger::init();
 
-    // TODO: possibly use rev-parse first, kill 2 birds?
-    let git_status = exec("git status --porcelain=2 --branch")?;
-    let mut ri = Repo::new();
-    ri.parse_status(
-        str::from_utf8(&git_status.stdout)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
-    );
+    if args.simple_mode {
+        let branch = String::from(str::from_utf8(&exec("git symbolic-ref --short HEAD")?.stdout)?.trim_end());
+        let mut br_out = String::from("(");
+        br_out.push_str(branch.as_str());
+        br_out.push(')');
+        let clean = Command::new("git").args(&["diff", "--quiet"]).status()?.success();
+        if !clean {
+            println!("{}{}", br_out.bright_cyan(), "*".red());
+        } else {
+            println!("{}", br_out.bright_cyan());
+        }
+        return Ok(());
+    }
 
     // TODO: use env vars for format str and glyphs
     // parse fmt string
@@ -444,6 +467,15 @@ fn main() -> io::Result<()> {
             }
         }
     }
+
+    // TODO: possibly use rev-parse first, kill 2 birds?
+    let git_status = exec("git status --porcelain=2 --branch")?;
+    let mut ri = Repo::new();
+    ri.parse_status(
+        str::from_utf8(&git_status.stdout)
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
+    );
+
     trace!("{:#?}", &ri);
     info!("{:#?}", &args);
     print_output(ri, args);
