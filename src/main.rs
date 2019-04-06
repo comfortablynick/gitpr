@@ -162,16 +162,19 @@ impl Repo {
         }
     }
 
-    fn git_root_dir(&mut self) -> String {
-        let cmd = exec("git rev-parse --absolute-git-dir")
-            .expect("error calling `git rev-parse --absolute-git-dir`");
-        let output = String::from_utf8(cmd.stdout).ok();
-        self.git_base_dir = output.clone();
-        output.unwrap_or_default().trim().to_string()
+    // TODO: simplify this -- does it have to be written to the Repo struct?
+    fn git_root_dir(&mut self) -> Result<String, AppError> {
+        if let Some(dir) = self.git_base_dir.clone() {
+            return Ok(dir);
+        }
+        let cmd = exec(&["git", "rev-parse", "--absolute-git-dir"])?;
+        let output = String::from_utf8(cmd.stdout)?;
+        self.git_base_dir = Some(output.clone());
+        Ok(output.trim().to_string())
     }
 
     fn git_diff_numstat(&mut self) {
-        let cmd = exec("git diff --numstat").expect("error calling `git diff --numstat`");
+        let cmd = exec(&["git", "diff", "--numstat"]).expect("error calling `git diff --numstat`");
         let output = String::from_utf8(cmd.stdout).unwrap_or_default();
         for line in output.lines() {
             let mut split = line.split_whitespace();
@@ -268,36 +271,35 @@ impl Repo {
         out
     }
 
-    fn fmt_stash(&mut self, indicators_only: bool) -> String {
-        let mut out = String::new();
-        let mut git = match self.git_base_dir.clone() {
-            Some(d) => d,
-            None => self.git_root_dir(),
-        };
+    fn fmt_stash(&mut self, indicators_only: bool) -> Option<String> {
+        let mut git = self.git_root_dir().expect("error getting root dir");
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
             .unwrap_or_default()
             .lines()
             .count();
         if st > 0 {
+            let mut out = String::with_capacity(4);
             self.stashed = st as u32;
             out.push(Repo::STASH_GLYPH);
             if !indicators_only {
                 out.push_str(&st.to_string());
             }
+            return Some(out);
         }
-        out
+        None
     }
 
-    fn fmt_untracked(&self, indicators_only: bool) -> String {
-        let mut out: String = String::new();
-        if self.untracked != 0 {
+    fn fmt_untracked(&self, indicators_only: bool) -> Option<String> {
+        if self.untracked > 0 {
+            let mut out: String = String::with_capacity(4);
             out.push(Repo::UNTRACKED_GLYPH);
             if !indicators_only {
                 out.push_str(&self.untracked.to_string());
             }
+            return Some(out);
         }
-        out
+        None
     }
 
     fn fmt_clean_dirty(&self, s: String) -> String {
@@ -345,19 +347,16 @@ impl GitArea {
 
 /// Query for git tag, use in simple or regular options
 fn git_tag() -> Result<String, AppError> {
-    let cmd = Command::new("git")
-        .args(&["describe", "--tags", "--exact-match"])
-        .output()?
-        .stdout;
-    let tag = str::from_utf8(&cmd)?.to_string();
+    let cmd = exec(&["git", "describe", "--tags", "--exact-match"])?;
+    let tag = str::from_utf8(&cmd.stdout)?.to_string();
     Ok(tag)
 }
 
 /// Spawn subprocess for `cmd` and access stdout/stderr
-fn exec(cmd: &str) -> io::Result<Output> {
-    let args: Vec<&str> = cmd.split_whitespace().collect();
-    let command = Command::new(&args[0])
-        .args(args.get(1..).expect("missing args in cmd"))
+/// Fails if process output != 0
+fn exec(cmd: &[&str]) -> io::Result<Output> {
+    let command = Command::new(&cmd[0])
+        .args(cmd.get(1..).expect("missing args in cmd"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -375,17 +374,17 @@ fn exec(cmd: &str) -> io::Result<Output> {
 }
 
 fn print_simple_output() -> Result<(), AppError> {
-    let branch =
-        String::from(str::from_utf8(&exec("git symbolic-ref --short HEAD")?.stdout)?.trim_end());
-    let mut br_out = String::from("(");
-    br_out.push_str(branch.as_str());
+    let cmd = exec(&["git", "symbolic-ref", "--short", "HEAD"])?;
+    log::debug!("git command status: {}", cmd.status);
+    let branch = str::from_utf8(&cmd.stdout)?.trim_end();
+    let mut br_out = String::with_capacity(12);
+    br_out.push('(');
+    br_out.push_str(branch);
     br_out.push(')');
-    let clean = Command::new("git")
-        .args(&["diff-index", "--quiet", "HEAD"])
-        .status()?
-        .success();
+    let clean = exec(&["git", "diff-index", "--quiet", "HEAD"]).is_ok();
+    log::debug!("Index clean: {}", clean);
     if !clean {
-        println!("{}{}", br_out.bright_cyan(), "*".red());
+        println!("{}{}", br_out.bright_cyan(), "*".bright_red());
     } else {
         println!("{}", br_out.bright_cyan());
     }
@@ -393,29 +392,40 @@ fn print_simple_output() -> Result<(), AppError> {
 }
 
 fn print_test_simple_output() -> Result<(), AppError> {
-    let status_cmd = Command::new("git")
-        .args(&["status", "--porcelain", "--branch", "--untracked-files=no"])
-        .output()?
-        .stdout;
-    let status = str::from_utf8(&status_cmd)?;
+    let status_cmd = exec(&[
+        "git",
+        "status",
+        "--porcelain",
+        "--branch",
+        "--untracked-files=no",
+    ])?;
+    let status = str::from_utf8(&status_cmd.stdout)?;
     let mut branch = "";
     let mut dirty = false;
     for line in status.lines() {
         if line.starts_with("##") {
-            branch = &line[2..];
+            branch = &line[3..];
         } else {
             dirty = true;
             break;
         }
     }
-    println!("Branch: {}\nDirty: {}\nTag: {}", branch, dirty, git_tag()?);
+    let mut out = String::with_capacity(12);
+    out.push('(');
+    out.push_str(branch);
+    out.push(')');
+    if dirty {
+        println!("{}{}", out.bright_cyan(), "*".bright_red());
+    } else {
+        println!("{}", out.bright_cyan());
+    }
     Ok(())
 }
 
 /// Print output based on parsing of --format string
 fn print_output(mut ri: Repo, args: Arg) {
     let mut fmt_str = args.format.chars();
-    let mut out: String = String::new();
+    let mut out: String = String::with_capacity(128);
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
@@ -434,12 +444,24 @@ fn print_output(mut ri: Repo, args: Arg) {
                             .as_str(),
                     ),
                     'n' => out.push_str("git"),
+                    'r' => match &ri.remote {
+                        Some(r) => out.push_str(r.as_str()),
+                        None => (),
+                    },
                     's' => out.push_str(
                         &ri.fmt_clean_dirty(ri.staged.fmt_modified(args.indicators_only))
                             .as_str(),
                     ),
-                    't' => out.push_str(&ri.fmt_stash(args.indicators_only).yellow().to_string()),
-                    'u' => out.push_str(&ri.fmt_untracked(args.indicators_only).blue().to_string()),
+                    't' => {
+                        if let Some(stash) = &ri.fmt_stash(args.indicators_only) {
+                            out.push_str(&stash.yellow().to_string());
+                        }
+                    }
+                    'u' => {
+                        if let Some(untracked) = &ri.fmt_untracked(args.indicators_only) {
+                            out.push_str(&untracked.blue().to_string());
+                        }
+                    }
                     '%' => out.push('%'),
                     &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
                 }
@@ -448,7 +470,7 @@ fn print_output(mut ri: Repo, args: Arg) {
             out.push(c);
         }
     }
-    // out = out.split("  ").collect();
+    log::debug!("String capacity: {}", out.capacity());
     println!("{}", out.trim_end());
 }
 
@@ -469,7 +491,6 @@ fn main() -> Result<(), AppError> {
         colored::control::set_override(false);
     };
 
-    // env::set_current_dir(&args.dir)?;
     if let Some(d) = &args.dir {
         env::set_current_dir(d)?;
     };
@@ -515,13 +536,23 @@ fn main() -> Result<(), AppError> {
     }
 
     // TODO: possibly use rev-parse first, kill 2 birds?
-    let git_status = exec("git status --porcelain=2 --branch")?;
+    let mut git_args = [
+        "git",
+        "status",
+        "--porcelain=2",
+        "--branch",
+        "--untracked-files=no",
+    ];
+    if opts.show_untracked {
+        git_args[4] = "--untracked-files=all";
+    }
+    log::debug!("Cmd: {:?}", git_args);
+    let git_status = exec(&git_args)?;
     let mut ri = Repo::new();
     ri.parse_status(
-        str::from_utf8(&git_status.stdout)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
+        str::from_utf8(&git_status.stdout)?
+            // .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
     );
-
     trace!("{:#?}", &ri);
     info!("{:#?}", &args);
     print_output(ri, args);

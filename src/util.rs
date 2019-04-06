@@ -21,3 +21,12 @@ impl From<std::str::Utf8Error> for AppError {
         }
     }
 }
+
+impl From<std::string::FromUtf8Error> for AppError {
+    fn from(error: std::string::FromUtf8Error) -> Self {
+        AppError {
+            kind: String::from("UTF-8"),
+            message: error.to_string(),
+        }
+    }
+}
