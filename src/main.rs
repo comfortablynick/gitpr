@@ -1,5 +1,8 @@
+#[macro_use]
+extern crate lazy_static;
 use colored::*;
 use log::{info, trace};
+use regex::Regex;
 use std::{
     env, io,
     path::PathBuf,
@@ -412,6 +415,11 @@ fn print_test_simple_output() -> Result<(), AppError> {
     }
     let mut out = String::with_capacity(12);
     out.push('(');
+    lazy_static! {
+        static ref RE_BRANCH: Regex = Regex::new(r"(\w+)\.\.\.").unwrap();
+    }
+    let br = RE_BRANCH.captures(branch).unwrap().get(1).unwrap().as_str();
+    log::debug!("Branch: {}", br);
     out.push_str(branch);
     out.push(')');
     if dirty {
