@@ -1,8 +1,5 @@
-#[macro_use]
-extern crate lazy_static;
 use colored::*;
 use log::{info, trace};
-use regex::Regex;
 use std::{
     env, io,
     path::PathBuf,
@@ -68,12 +65,6 @@ struct Arg {
     /// Does not accept format string (-f, --format)
     #[structopt(short = "s", long = "simple")]
     simple_mode: bool,
-
-    /// Test simple mode (similar to factory git prompt)
-    ///
-    /// Does not accept format string (-f, --format)
-    #[structopt(short = "t", long = "test-simple")]
-    test_simple_mode: bool,
 
     /// Format print-f style string
     #[structopt(
@@ -351,7 +342,7 @@ impl GitArea {
 /// Query for git tag, use in simple or regular options
 fn git_tag() -> Result<String, AppError> {
     let cmd = exec(&["git", "describe", "--tags", "--exact-match"])?;
-    let tag = str::from_utf8(&cmd.stdout)?.to_string();
+    let tag = str::from_utf8(&cmd.stdout)?.trim_end().to_string();
     Ok(tag)
 }
 
@@ -376,25 +367,8 @@ fn exec(cmd: &[&str]) -> io::Result<Output> {
     Ok(result)
 }
 
+/// Simple output to mimic default git prompt
 fn print_simple_output() -> Result<(), AppError> {
-    let cmd = exec(&["git", "symbolic-ref", "--short", "HEAD"])?;
-    log::debug!("git command status: {}", cmd.status);
-    let branch = str::from_utf8(&cmd.stdout)?.trim_end();
-    let mut br_out = String::with_capacity(12);
-    br_out.push('(');
-    br_out.push_str(branch);
-    br_out.push(')');
-    let clean = exec(&["git", "diff-index", "--quiet", "HEAD"]).is_ok();
-    log::debug!("Index clean: {}", clean);
-    if !clean {
-        println!("{}{}", br_out.bright_cyan(), "*".bright_red());
-    } else {
-        println!("{}", br_out.bright_cyan());
-    }
-    Ok(())
-}
-
-fn print_test_simple_output() -> Result<(), AppError> {
     let status_cmd = exec(&[
         "git",
         "status",
@@ -403,11 +377,11 @@ fn print_test_simple_output() -> Result<(), AppError> {
         "--untracked-files=no",
     ])?;
     let status = str::from_utf8(&status_cmd.stdout)?;
-    let mut branch = "";
+    let mut raw_branch = "";
     let mut dirty = false;
     for line in status.lines() {
         if line.starts_with("##") {
-            branch = &line[3..];
+            raw_branch = &line[3..];
         } else {
             dirty = true;
             break;
@@ -415,12 +389,19 @@ fn print_test_simple_output() -> Result<(), AppError> {
     }
     let mut out = String::with_capacity(12);
     out.push('(');
-    lazy_static! {
-        static ref RE_BRANCH: Regex = Regex::new(r"(\w+)\.\.\.").unwrap();
-    }
-    let br = RE_BRANCH.captures(branch).unwrap().get(1).unwrap().as_str();
-    log::debug!("Branch: {}", br);
-    out.push_str(branch);
+    let split = raw_branch.split("...").collect::<Vec<&str>>();
+    let branch = match split.get(0) {
+        Some(b) if b.starts_with("HEAD") => git_tag().unwrap_or_else(|_| String::from("unknown")),
+        Some(b) => b.to_string(),
+        None => "unknown".to_string(),
+    };
+    log::debug!(
+        "Raw: {}; Split: {:?}; Branch: {}",
+        raw_branch,
+        split,
+        branch
+    );
+    out.push_str(&branch);
     out.push(')');
     if dirty {
         println!("{}{}", out.bright_cyan(), "*".bright_red());
@@ -507,10 +488,6 @@ fn main() -> Result<(), AppError> {
 
     if args.simple_mode {
         return print_simple_output();
-    }
-
-    if args.test_simple_mode {
-        return print_test_simple_output();
     }
 
     // TODO: use env vars for format str and glyphs
