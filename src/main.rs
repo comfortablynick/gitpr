@@ -8,6 +8,7 @@ use std::{
 };
 use structopt::StructOpt;
 
+mod tests;
 mod util;
 use util::AppError;
 
@@ -111,17 +112,16 @@ struct GitArea {
     copied: u32,
 }
 
-#[allow(dead_code)]
 impl Repo {
     const BRANCH_GLYPH: char = '';
     const MODIFIED_GLYPH: char = 'Δ';
-    const DIRTY_GLYPH: char = '✘';
-    const CLEAN_GLYPH: char = '✔';
-    const UNTRACKED_GLYPH: char = '?';
-    const UNMERGED_GLYPH: char = '‼';
+    const UNTRACKED_GLYPH: char = '…';
     const AHEAD_GLYPH: char = '↑';
     const BEHIND_GLYPH: char = '↓';
     const STASH_GLYPH: char = '$';
+    // const DIRTY_GLYPH: char = '✘';
+    // const CLEAN_GLYPH: char = '✔';
+    // const UNMERGED_GLYPH: char = '‼';
 
     fn new() -> Repo {
         Repo {
@@ -368,18 +368,10 @@ fn exec(cmd: &[&str]) -> io::Result<Output> {
 }
 
 /// Simple output to mimic default git prompt
-fn print_simple_output() -> Result<(), AppError> {
-    let status_cmd = exec(&[
-        "git",
-        "status",
-        "--porcelain",
-        "--branch",
-        "--untracked-files=no",
-    ])?;
-    let status = str::from_utf8(&status_cmd.stdout)?;
+fn simple_output(git_status: &str) -> Result<String, AppError> {
     let mut raw_branch = "";
     let mut dirty = false;
-    for line in status.lines() {
+    for line in git_status.lines() {
         if line.starts_with("##") {
             raw_branch = &line[3..];
         } else {
@@ -387,8 +379,6 @@ fn print_simple_output() -> Result<(), AppError> {
             break;
         }
     }
-    let mut out = String::with_capacity(12);
-    out.push('(');
     let split = raw_branch.split("...").collect::<Vec<&str>>();
     let branch = match split.get(0) {
         Some(b) if b.starts_with("HEAD") => git_tag().unwrap_or_else(|_| String::from("unknown")),
@@ -401,14 +391,13 @@ fn print_simple_output() -> Result<(), AppError> {
         split,
         branch
     );
-    out.push_str(&branch);
-    out.push(')');
-    if dirty {
-        println!("{}{}", out.bright_cyan(), "*".bright_red());
-    } else {
-        println!("{}", out.bright_cyan());
-    }
-    Ok(())
+    Ok(format!(
+        "{}{}{}{}",
+        "(".bright_cyan(),
+        branch.bright_cyan(),
+        ")".bright_cyan(),
+        if dirty { "*".bright_red() } else { "".normal() },
+    ))
 }
 
 /// Print output based on parsing of --format string
@@ -448,7 +437,7 @@ fn print_output(mut ri: Repo, args: Arg) {
                     }
                     'u' => {
                         if let Some(untracked) = &ri.fmt_untracked(args.indicators_only) {
-                            out.push_str(&untracked.blue().to_string());
+                            out.push_str(&untracked.bright_blue().to_string());
                         }
                     }
                     '%' => out.push('%'),
@@ -487,7 +476,16 @@ fn main() -> Result<(), AppError> {
     env_logger::init();
 
     if args.simple_mode {
-        return print_simple_output();
+        let status_cmd = exec(&[
+            "git",
+            "status",
+            "--porcelain",
+            "--branch",
+            "--untracked-files=no",
+        ])?;
+        let status = str::from_utf8(&status_cmd.stdout)?;
+        println!("{}", simple_output(status)?);
+        return Ok(());
     }
 
     // TODO: use env vars for format str and glyphs
