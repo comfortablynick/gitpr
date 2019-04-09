@@ -4,16 +4,13 @@ use super::*;
 #[test]
 fn test_simple_clean() {
     let clean_status = "## master...origin/master";
+    let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\n";
 
-    assert_eq!(
-        simple_output(clean_status).unwrap(),
-        format!(
-            "{}{}{}",
-            "(".bright_cyan(),
-            "master".bright_cyan(),
-            ")".bright_cyan()
-        )
-    );
+    let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+    let mut buf = bufwtr.buffer();
+    simple_output(&mut buf, clean_status).unwrap();
+
+    assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
 }
 
 #[test]
@@ -21,15 +18,11 @@ fn test_simple_dirty() {
     let dirty_status = "## master...origin/master
  M src/main.rs
 ?? src/tests.rs";
+    let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\u{1b}[0m\u{1b}[38;5;9m*\n";
 
-    assert_eq!(
-        simple_output(dirty_status).unwrap(),
-        format!(
-            "{}{}{}{}",
-            "(".bright_cyan(),
-            "master".bright_cyan(),
-            ")".bright_cyan(),
-            "*".bright_red(),
-        )
-    );
+    let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+    let mut buf = bufwtr.buffer();
+    simple_output(&mut buf, dirty_status).unwrap();
+
+    assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
 }

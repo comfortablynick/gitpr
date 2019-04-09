@@ -1,12 +1,14 @@
 use colored::*;
-use log::{info, trace};
+use log::{debug, info, trace};
 use std::{
-    env, io,
+    env,
+    io::{self, Write},
     path::PathBuf,
     process::{self, Command, Output, Stdio},
     str,
 };
 use structopt::StructOpt;
+use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
 
 mod tests;
 mod util;
@@ -26,7 +28,6 @@ const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
     %u  untracked files
     %d  diff lines, ex: \"+20/-10\"
     %t  stashed files indicator";
-// type AnyError = Box<dyn std::error::Error + 'static>;
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -181,7 +182,6 @@ impl Repo {
     fn parse_status(&mut self, gs: &str) {
         for line in gs.lines() {
             let mut words = line.split_whitespace();
-            // scan by word
             while let Some(word) = words.next() {
                 match word {
                     "#" => {
@@ -213,40 +213,56 @@ impl Repo {
         }
     }
 
-    fn fmt_branch(&self) -> String {
+    fn fmt_branch(&self, buf: &mut Buffer) -> Result<(), AppError> {
         match &self.branch {
-            Some(s) => s.to_string(),
-            None => String::new(),
+            Some(s) => {
+                buf.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_intense(true))?;
+                write!(buf, "{}", s)?;
+            }
+            None => (),
         }
+        Ok(())
     }
 
-    fn fmt_commit(&self, len: usize) -> String {
+    fn fmt_commit(&self, buf: &mut Buffer, len: usize) -> Result<(), AppError> {
         match &self.commit {
             Some(s) => {
+                buf.set_color(
+                    ColorSpec::new()
+                        .set_fg(Some(Color::Black))
+                        .set_bg(Some(Color::Green)),
+                )?;
                 if s == "(initial)" {
-                    return s.to_string();
+                    write!(buf, "(initial)")?;
+                } else {
+                    write!(buf, "{}", s[..len].to_string())?;
                 }
-                s[..len].to_string()
             }
-            None => String::new(),
+            None => (),
         }
+        Ok(())
     }
 
-    fn fmt_ahead_behind(&self, indicators_only: bool) -> String {
-        let mut out = String::new();
+    fn fmt_ahead_behind(&self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+        // let mut out = String::new();
         if self.ahead != 0 {
-            out.push(Repo::AHEAD_GLYPH);
+            // out.push(Repo::AHEAD_GLYPH);
+            write!(buf, "{}", Repo::AHEAD_GLYPH)?;
             if !indicators_only {
-                out.push_str(&self.ahead.to_string());
+                // out.push_str(&self.ahead.to_string());
+                write!(buf, "{}", &self.ahead)?;
             }
         }
         if self.behind != 0 {
-            out.push(Repo::BEHIND_GLYPH);
+            // out.push(Repo::BEHIND_GLYPH);
+            write!(buf, "{}", Repo::BEHIND_GLYPH)?;
             if !indicators_only {
-                out.push_str(&self.behind.to_string());
+                // out.push_str(&self.behind.to_string());
+                write!(buf, "{}", self.behind)?;
             }
         }
-        out
+        // out
+        Ok(())
     }
 
     fn fmt_diff_numstat(&mut self) -> String {
@@ -368,7 +384,7 @@ fn exec(cmd: &[&str]) -> io::Result<Output> {
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output(git_status: &str) -> Result<String, AppError> {
+fn simple_output(buf: &mut Buffer, git_status: &str) -> Result<(), AppError> {
     let mut raw_branch = "";
     let mut dirty = false;
     for line in git_status.lines() {
@@ -385,38 +401,45 @@ fn simple_output(git_status: &str) -> Result<String, AppError> {
         Some(b) => b.to_string(),
         None => "unknown".to_string(),
     };
-    log::debug!(
+    debug!(
         "Raw: {}; Split: {:?}; Branch: {}",
-        raw_branch,
-        split,
-        branch
+        raw_branch, split, branch
     );
-    Ok(format!(
-        "{}{}{}{}",
-        "(".bright_cyan(),
-        branch.bright_cyan(),
-        ")".bright_cyan(),
-        if dirty { "*".bright_red() } else { "".normal() },
-    ))
+    let mut color = ColorSpec::new();
+    color.set_fg(Some(Color::Cyan));
+    color.set_intense(true);
+
+    buf.set_color(&color)?;
+    write!(buf, "({})", branch)?;
+    if dirty {
+        color.set_fg(Some(Color::Red));
+        buf.set_color(&color)?;
+        write!(buf, "*")?;
+    }
+    writeln!(buf)?;
+    Ok(())
 }
 
 /// Print output based on parsing of --format string
-fn print_output(mut ri: Repo, args: Arg) {
+fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppError> {
     let mut fmt_str = args.format.chars();
     let mut out: String = String::with_capacity(128);
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match &c {
-                    'a' => out.push_str(&ri.fmt_ahead_behind(args.indicators_only).as_str()),
-                    'b' => out.push_str(ri.fmt_branch().bright_cyan().to_string().as_str()),
-                    'c' => out.push_str(ri.fmt_commit(7).black().on_green().to_string().as_str()),
+                    'a' => ri.fmt_ahead_behind(buf, args.indicators_only)?,
+                    'b' => ri.fmt_branch(buf)?,
+                    'c' => ri.fmt_commit(buf, 7)?,
                     'd' => {
                         if ri.unstaged.has_changed() {
-                            out.push_str(ri.fmt_diff_numstat().as_str());
+                            write!(buf, "{}", ri.fmt_diff_numstat())?;
                         }
                     }
-                    'g' => out.push(Repo::BRANCH_GLYPH),
+                    'g' => {
+                        buf.set_color(&ColorSpec::new())?;
+                        write!(buf, "{}", Repo::BRANCH_GLYPH)?;
+                    }
                     'm' => out.push_str(
                         &ri.fmt_clean_dirty(ri.unstaged.fmt_modified(args.indicators_only))
                             .as_str(),
@@ -440,21 +463,25 @@ fn print_output(mut ri: Repo, args: Arg) {
                             out.push_str(&untracked.bright_blue().to_string());
                         }
                     }
-                    '%' => out.push('%'),
+                    '%' => write!(buf, "%")?,
                     &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
                 }
             }
         } else {
-            out.push(c);
+            buf.set_color(&ColorSpec::new())?;
+            write!(buf, "{}", c)?;
         }
     }
-    log::debug!("String capacity: {}", out.capacity());
+    debug!("String capacity: {}", out.capacity());
     println!("{}", out.trim_end());
+    Ok(())
 }
 
 fn main() -> Result<(), AppError> {
     let args = Arg::from_args();
     let mut opts: Opt = Default::default();
+    let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+    let mut buf = bufwtr.buffer();
 
     env::set_var(
         "RUST_LOG",
@@ -467,6 +494,7 @@ fn main() -> Result<(), AppError> {
 
     if args.no_color {
         colored::control::set_override(false);
+        env::set_var("TERM", "dumb");
     };
 
     if let Some(d) = &args.dir {
@@ -484,10 +512,10 @@ fn main() -> Result<(), AppError> {
             "--untracked-files=no",
         ])?;
         let status = str::from_utf8(&status_cmd.stdout)?;
-        println!("{}", simple_output(status)?);
+        simple_output(&mut buf, status)?;
+        bufwtr.print(&buf)?;
         return Ok(());
     }
-
     // TODO: use env vars for format str and glyphs
     // parse fmt string
     let mut fmt_str = args.format.chars();
@@ -517,7 +545,6 @@ fn main() -> Result<(), AppError> {
             }
         }
     }
-
     // TODO: possibly use rev-parse first, kill 2 birds?
     let mut git_args = [
         "git",
@@ -529,15 +556,13 @@ fn main() -> Result<(), AppError> {
     if opts.show_untracked {
         git_args[4] = "--untracked-files=all";
     }
-    log::debug!("Cmd: {:?}", git_args);
+    debug!("Cmd: {:?}", git_args);
     let git_status = exec(&git_args)?;
     let mut ri = Repo::new();
-    ri.parse_status(
-        str::from_utf8(&git_status.stdout)?
-            // .map_err(|_| io::Error::new(io::ErrorKind::Other, "Error"))?,
-    );
+    ri.parse_status(str::from_utf8(&git_status.stdout)?);
     trace!("{:#?}", &ri);
     info!("{:#?}", &args);
-    print_output(ri, args);
+    print_output(ri, args, &mut buf)?;
+    bufwtr.print(&buf)?;
     Ok(())
 }
