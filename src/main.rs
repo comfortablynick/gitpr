@@ -1,4 +1,3 @@
-use colored::*;
 use log::{debug, info, trace};
 use std::{
     env,
@@ -10,24 +9,33 @@ use std::{
 use structopt::StructOpt;
 use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
 
+mod logger;
 mod tests;
 mod util;
 use util::AppError;
 
 // Constants + globals
 const PROG: &str = env!("CARGO_PKG_NAME");
-const FORMAT_STRING_USAGE: &str = "Tokenized string may contain:
-    %g  branch glyph ()
-    %n  VC name
-    %b  branch
-    %r  remote
-    %a  commits ahead/behind remote
-    %c  current commit hash
-    %m  unstaged changes (modified/added/removed)
-    %s  staged changes (modified/added/removed)
-    %u  untracked files
-    %d  diff lines, ex: \"+20/-10\"
-    %t  stashed files indicator";
+const FORMAT_STRING_USAGE: &str = "\
+Tokenized string may contain:
+------------------------------
+%g  branch glyph ()
+%n  VC name
+%b  branch
+%r  upstream
+%a  commits ahead/behind remote
+%c  current commit hash
+%m  unstaged changes (modified/added/removed)
+%s  staged changes (modified/added/removed)
+%u  untracked files
+%d  diff lines, ex: \"+20/-10\"
+%t  stashed files indicator
+------------------------------
+";
+// Colors
+const BLUE: u8 = 12;
+const RED: u8 = 124;
+const BOLD_SILVER: u8 = 188;
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -37,7 +45,7 @@ struct Opt {
     show_branch_glyph: bool,
     show_commit: bool,
     show_diff: bool,
-    show_remote: bool,
+    show_upstream: bool,
     show_stashed: bool,
     show_staged_modified: bool,
     show_unstaged_modified: bool,
@@ -52,13 +60,17 @@ struct Arg {
     #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
     verbose: u8,
 
+    /// Silence debug log output
+    #[structopt(short = "q", long = "quiet")]
+    quiet: bool,
+
     /// Show indicators instead of numeric values.
     ///
     /// Does not apply to '%d' (diff), which always uses numeric values
     #[structopt(short = "i", long = "indicators-only")]
     indicators_only: bool,
 
-    /// Disable colored output
+    /// Disable color in output
     #[structopt(short = "n", long = "no-color")]
     no_color: bool,
 
@@ -72,7 +84,7 @@ struct Arg {
     #[structopt(
         short = "f",
         long = "format",
-        default_value = "%g %b@%c %a %m %u %s",
+        default_value = "%g %b@%c %a %m %d %s %u %t",
         raw(long_help = "FORMAT_STRING_USAGE")
     )]
     format: String,
@@ -188,7 +200,7 @@ impl Repo {
                         while let Some(br) = words.next() {
                             match br {
                                 "branch.oid" => self.commit = words.next().map(String::from),
-                                "branch.head" => self.branch = words.next().map(String::from),
+                                "branch.head" => self.branch = self.parse_head(words.next()),
                                 "branch.upstream" => self.upstream = words.next().map(String::from),
                                 "branch.ab" => {
                                     self.ahead = words.next().map_or(0, |s| s.parse().unwrap());
@@ -213,17 +225,34 @@ impl Repo {
         }
     }
 
+    /// Parse git status output, seeking tag if needed
+    fn parse_head(&self, head: Option<&str>) -> Option<String> {
+        match head {
+            Some(br) => match br {
+                "(detached)" => Some(git_tag().unwrap_or_else(|_| String::from("unknown"))),
+                _ => Some(br.to_string()),
+            },
+            None => None,
+        }
+    }
+
+    /// Write formatted branch to buffer
     fn fmt_branch(&self, buf: &mut Buffer) -> Result<(), AppError> {
-        match &self.branch {
-            Some(s) => {
-                buf.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)).set_intense(true))?;
-                write!(buf, "{}", s)?;
-            }
-            None => (),
+        if let Some(s) = &self.branch {
+            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BLUE))))?;
+            write!(buf, "{}", s)?;
         }
         Ok(())
     }
 
+    /// Write branch glyph to buffer
+    fn fmt_branch_glyph(&self, buf: &mut Buffer) -> Result<(), AppError> {
+        buf.set_color(&ColorSpec::new())?;
+        write!(buf, "{}", Repo::BRANCH_GLYPH)?;
+        Ok(())
+    }
+
+    /// Write formatted commit to buffer
     fn fmt_commit(&self, buf: &mut Buffer, len: usize) -> Result<(), AppError> {
         match &self.commit {
             Some(s) => {
@@ -243,83 +272,86 @@ impl Repo {
         Ok(())
     }
 
+    /// Write formatted ahead/behind details to buffer
     fn fmt_ahead_behind(&self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
-        // let mut out = String::new();
         if self.ahead != 0 {
-            // out.push(Repo::AHEAD_GLYPH);
             write!(buf, "{}", Repo::AHEAD_GLYPH)?;
             if !indicators_only {
-                // out.push_str(&self.ahead.to_string());
                 write!(buf, "{}", &self.ahead)?;
             }
         }
         if self.behind != 0 {
-            // out.push(Repo::BEHIND_GLYPH);
             write!(buf, "{}", Repo::BEHIND_GLYPH)?;
             if !indicators_only {
-                // out.push_str(&self.behind.to_string());
                 write!(buf, "{}", self.behind)?;
             }
         }
-        // out
         Ok(())
     }
 
-    fn fmt_diff_numstat(&mut self) -> String {
-        self.git_diff_numstat();
-        let mut out = String::new();
+    /// Write formatted +n/-n git diff numstat details to buffer
+    fn fmt_diff_numstat(
+        &mut self,
+        buf: &mut Buffer,
+        indicators_only: bool,
+    ) -> Result<(), AppError> {
+        if !self.unstaged.has_changed() || indicators_only {
+            return Ok(());
+        }
+        buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BOLD_SILVER))))?;
+        if self.insertions == 0 && self.deletions == 0 {
+            self.git_diff_numstat();
+        }
         if self.insertions > 0 {
-            out.push_str("+");
-            out.push_str(&self.insertions.to_string());
+            write!(buf, "+{}", self.insertions)?;
             if self.deletions > 0 {
-                out.push_str("/");
+                write!(buf, "/")?;
             }
             if self.deletions > 0 {
-                out.push_str(&self.deletions.to_string());
+                write!(buf, "-{}", self.deletions)?;
             }
         }
-        out
+        Ok(())
     }
 
-    fn fmt_stash(&mut self, indicators_only: bool) -> Option<String> {
-        let mut git = self.git_root_dir().expect("error getting root dir");
+    /// Write formatted stash details to buffer
+    fn fmt_stash(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+        let mut git = self.git_root_dir()?;
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
             .unwrap_or_default()
             .lines()
             .count();
         if st > 0 {
-            let mut out = String::with_capacity(4);
             self.stashed = st as u32;
-            out.push(Repo::STASH_GLYPH);
+            buf.set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))?;
+            write!(buf, "{}", Repo::STASH_GLYPH)?;
             if !indicators_only {
-                out.push_str(&st.to_string());
+                write!(buf, "{}", st)?;
             }
-            return Some(out);
         }
-        None
+        Ok(())
     }
 
-    fn fmt_untracked(&self, indicators_only: bool) -> Option<String> {
+    /// Write formatted untracked indicator and/or count to buffer
+    fn fmt_untracked(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
         if self.untracked > 0 {
-            let mut out: String = String::with_capacity(4);
-            out.push(Repo::UNTRACKED_GLYPH);
+            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(245))))?;
+            write!(buf, "{}", Repo::UNTRACKED_GLYPH)?;
             if !indicators_only {
-                out.push_str(&self.untracked.to_string());
+                write!(buf, "{}", self.untracked)?;
             }
-            return Some(out);
         }
-        None
+        Ok(())
     }
 
-    fn fmt_clean_dirty(&self, s: String) -> String {
-        if self.unstaged.has_changed() {
-            return s.red().to_string();
+    /// Write formatted upstream to buffer
+    fn fmt_upstream(&self, buf: &mut Buffer) -> Result<(), AppError> {
+        if let Some(r) = &self.upstream {
+            buf.set_color(&ColorSpec::new())?;
+            write!(buf, "{}", r)?;
         }
-        if self.staged.has_changed() {
-            return s.yellow().to_string();
-        }
-        s.green().to_string()
+        Ok(())
     }
 }
 
@@ -335,15 +367,15 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self, indicators_only: bool) -> String {
-        let mut out: String = String::new();
+    fn fmt_modified(&self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
         if self.has_changed() {
-            out.push(Repo::MODIFIED_GLYPH);
+            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(RED))))?;
+            write!(buf, "{}", Repo::MODIFIED_GLYPH)?;
             if !indicators_only {
-                out.push_str(&self.change_ct().to_string());
+                write!(buf, "{}", self.change_ct())?;
             }
         }
-        out
+        Ok(())
     }
 
     fn has_changed(&self) -> bool {
@@ -412,7 +444,7 @@ fn simple_output(buf: &mut Buffer, git_status: &str) -> Result<(), AppError> {
     buf.set_color(&color)?;
     write!(buf, "({})", branch)?;
     if dirty {
-        color.set_fg(Some(Color::Red));
+        color.set_fg(Some(Color::Ansi256(RED)));
         buf.set_color(&color)?;
         write!(buf, "*")?;
     }
@@ -423,7 +455,6 @@ fn simple_output(buf: &mut Buffer, git_status: &str) -> Result<(), AppError> {
 /// Print output based on parsing of --format string
 fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppError> {
     let mut fmt_str = args.format.chars();
-    let mut out: String = String::with_capacity(128);
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
@@ -431,38 +462,14 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppErro
                     'a' => ri.fmt_ahead_behind(buf, args.indicators_only)?,
                     'b' => ri.fmt_branch(buf)?,
                     'c' => ri.fmt_commit(buf, 7)?,
-                    'd' => {
-                        if ri.unstaged.has_changed() {
-                            write!(buf, "{}", ri.fmt_diff_numstat())?;
-                        }
-                    }
-                    'g' => {
-                        buf.set_color(&ColorSpec::new())?;
-                        write!(buf, "{}", Repo::BRANCH_GLYPH)?;
-                    }
-                    'm' => out.push_str(
-                        &ri.fmt_clean_dirty(ri.unstaged.fmt_modified(args.indicators_only))
-                            .as_str(),
-                    ),
-                    'n' => out.push_str("git"),
-                    'r' => match &ri.remote {
-                        Some(r) => out.push_str(r.as_str()),
-                        None => (),
-                    },
-                    's' => out.push_str(
-                        &ri.fmt_clean_dirty(ri.staged.fmt_modified(args.indicators_only))
-                            .as_str(),
-                    ),
-                    't' => {
-                        if let Some(stash) = &ri.fmt_stash(args.indicators_only) {
-                            out.push_str(&stash.yellow().to_string());
-                        }
-                    }
-                    'u' => {
-                        if let Some(untracked) = &ri.fmt_untracked(args.indicators_only) {
-                            out.push_str(&untracked.bright_blue().to_string());
-                        }
-                    }
+                    'd' => ri.fmt_diff_numstat(buf, args.indicators_only)?,
+                    'g' => ri.fmt_branch_glyph(buf)?,
+                    'm' => ri.unstaged.fmt_modified(buf, args.indicators_only)?,
+                    'n' => write!(buf, "git")?,
+                    'r' => ri.fmt_upstream(buf)?,
+                    's' => ri.staged.fmt_modified(buf, args.indicators_only)?,
+                    't' => ri.fmt_stash(buf, args.indicators_only)?,
+                    'u' => ri.fmt_untracked(buf, args.indicators_only)?,
                     '%' => write!(buf, "%")?,
                     &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
                 }
@@ -472,36 +479,31 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppErro
             write!(buf, "{}", c)?;
         }
     }
-    debug!("String capacity: {}", out.capacity());
-    println!("{}", out.trim_end());
+    writeln!(buf)?;
     Ok(())
 }
 
 fn main() -> Result<(), AppError> {
     let args = Arg::from_args();
     let mut opts: Opt = Default::default();
-    let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+    let bufwtr = if args.no_color {
+        termcolor::BufferWriter::stdout(ColorChoice::Never)
+    } else {
+        termcolor::BufferWriter::stdout(ColorChoice::Auto)
+    };
     let mut buf = bufwtr.buffer();
 
-    env::set_var(
-        "RUST_LOG",
-        match &args.verbose {
-            0 => "warning",
-            1 => "info",
-            2 | _ => "trace",
-        },
-    );
+    if !args.quiet {
+        logger::init_logger(args.verbose);
+    }
 
     if args.no_color {
-        colored::control::set_override(false);
         env::set_var("TERM", "dumb");
     };
 
     if let Some(d) = &args.dir {
         env::set_current_dir(d)?;
     };
-
-    env_logger::init();
 
     if args.simple_mode {
         let status_cmd = exec(&[
@@ -517,7 +519,6 @@ fn main() -> Result<(), AppError> {
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
-    // parse fmt string
     let mut fmt_str = args.format.chars();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
@@ -530,6 +531,7 @@ fn main() -> Result<(), AppError> {
                     'g' => opts.show_branch_glyph = true,
                     'm' => opts.show_unstaged_modified = true,
                     'n' => opts.show_vcs = true,
+                    'r' => opts.show_upstream = true,
                     's' => opts.show_staged_modified = true,
                     't' => opts.show_stashed = true,
                     'u' => opts.show_untracked = true,
@@ -545,7 +547,7 @@ fn main() -> Result<(), AppError> {
             }
         }
     }
-    // TODO: possibly use rev-parse first, kill 2 birds?
+    // TODO: possibly use rev-parse first
     let mut git_args = [
         "git",
         "status",
@@ -557,11 +559,14 @@ fn main() -> Result<(), AppError> {
         git_args[4] = "--untracked-files=all";
     }
     debug!("Cmd: {:?}", git_args);
+
     let git_status = exec(&git_args)?;
     let mut ri = Repo::new();
     ri.parse_status(str::from_utf8(&git_status.stdout)?);
+
     trace!("{:#?}", &ri);
     info!("{:#?}", &args);
+
     print_output(ri, args, &mut buf)?;
     bufwtr.print(&buf)?;
     Ok(())
