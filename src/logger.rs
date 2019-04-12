@@ -39,6 +39,9 @@ pub fn init_logger(verbose: u8) {
         let mut subtle_style = buf.style();
         subtle_style.set_color(Color::Black).set_intense(true);
 
+        let mut gray_style = buf.style();
+        gray_style.set_color(Color::Ansi256(250));
+
         writeln!(
             buf,
             "\
@@ -56,10 +59,10 @@ pub fn init_logger(verbose: u8) {
             lbracket = subtle_style.value("["),
             rbracket = subtle_style.value("]"),
             colon = subtle_style.value(":"),
-            file = record.file().unwrap_or("<unnamed>"),
-            time = time,
+            file = gray_style.value(record.file().unwrap_or("<unnamed>")),
+            time = gray_style.value(time),
             level = level,
-            line_no = record.line().unwrap_or(0),
+            line_no = gray_style.value(record.line().unwrap_or(0)),
             record_args = &record.args(),
         )
     })

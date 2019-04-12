@@ -18,7 +18,7 @@ fn test_simple_dirty() {
     let dirty_status = "## master...origin/master
  M src/main.rs
 ?? src/tests.rs";
-    let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\u{1b}[0m\u{1b}[38;5;9m*\n";
+    let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\u{1b}[0m\u{1b}[38;5;124m*\n";
 
     let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
     let mut buf = bufwtr.buffer();
