@@ -359,6 +359,7 @@ impl GitArea {
     fn parse_modified(&mut self, ln: char) {
         match ln {
             'M' => self.modified += 1,
+            'T' => self.modified += 1,
             'A' => self.added += 1,
             'D' => self.deleted += 1,
             'R' => self.renamed += 1,
