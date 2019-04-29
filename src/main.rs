@@ -129,8 +129,8 @@ impl Repo {
     const BRANCH_GLYPH: char = '';
     const MODIFIED_GLYPH: char = 'Δ';
     const UNTRACKED_GLYPH: char = '…';
-    const AHEAD_GLYPH: char = '↑';
-    const BEHIND_GLYPH: char = '↓';
+    const AHEAD_GLYPH: char = '⇡';
+    const BEHIND_GLYPH: char = '⇣';
     const STASH_GLYPH: char = '$';
     // const DIRTY_GLYPH: char = '✘';
     // const CLEAN_GLYPH: char = '✔';
