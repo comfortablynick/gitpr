@@ -28,6 +28,7 @@ Tokenized string may contain:
 %m  unstaged changes (modified/added/removed)
 %s  staged changes (modified/added/removed)
 %u  untracked files
+%U  unmerged files (merge in progress)
 %d  diff lines, ex: \"+20/-10\"
 %t  stashed files indicator
 ------------------------------
@@ -50,6 +51,7 @@ struct Opt {
     show_staged_modified: bool,
     show_unstaged_modified: bool,
     show_untracked: bool,
+    show_unmerged: bool,
     show_vcs: bool,
 }
 
@@ -84,7 +86,7 @@ struct Arg {
     #[structopt(
         short = "f",
         long = "format",
-        default_value = "%g %b@%c %a %m %d %s %u %t",
+        default_value = "%g %b@%c %a %m %d %s %u %t %U",
         raw(long_help = "FORMAT_STRING_USAGE")
     )]
     format: String,
@@ -126,15 +128,16 @@ struct GitArea {
 }
 
 impl Repo {
-    const BRANCH_GLYPH: char = '';
-    const MODIFIED_GLYPH: char = 'Δ';
-    const UNTRACKED_GLYPH: char = '…';
     const AHEAD_GLYPH: char = '⇡';
     const BEHIND_GLYPH: char = '⇣';
+    const BRANCH_GLYPH: char = '';
+    const MODIFIED_GLYPH: char = 'Δ';
     const STASH_GLYPH: char = '$';
+    const UNMERGED_GLYPH: char = '‼';
+    const UNTRACKED_GLYPH: char = '…';
+
     // const DIRTY_GLYPH: char = '✘';
     // const CLEAN_GLYPH: char = '✔';
-    // const UNMERGED_GLYPH: char = '‼';
 
     fn new() -> Repo {
         Repo {
@@ -345,6 +348,18 @@ impl Repo {
         Ok(())
     }
 
+    /// Write formatted unmerged files indicator and/or count to buffer
+    fn fmt_unmerged(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+        if self.unmerged > 0 {
+            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(196))))?;
+            write!(buf, "{}", Repo::UNMERGED_GLYPH)?;
+            if !indicators_only {
+                write!(buf, "{}", self.unmerged)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Write formatted upstream to buffer
     fn fmt_upstream(&self, buf: &mut Buffer) -> Result<(), AppError> {
         if let Some(r) = &self.upstream {
@@ -471,6 +486,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppErro
                     's' => ri.staged.fmt_modified(buf, args.indicators_only)?,
                     't' => ri.fmt_stash(buf, args.indicators_only)?,
                     'u' => ri.fmt_untracked(buf, args.indicators_only)?,
+                    'U' => ri.fmt_unmerged(buf, args.indicators_only)?,
                     '%' => write!(buf, "%")?,
                     &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
                 }
@@ -536,6 +552,7 @@ fn main() -> Result<(), AppError> {
                     's' => opts.show_staged_modified = true,
                     't' => opts.show_stashed = true,
                     'u' => opts.show_untracked = true,
+                    'U' => opts.show_unmerged = true,
                     '%' => continue,
                     &c => {
                         eprintln!(
