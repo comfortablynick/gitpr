@@ -1,5 +1,5 @@
 #!/usr/bin/env just --justfile
-bin_name := 'shellenv'
+bin_name := 'gitpr'
 dev := '1'
 
 alias r := run
