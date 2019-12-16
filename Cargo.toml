@@ -5,7 +5,7 @@ authors = ["Nick Murphy <comfortablynick@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-log = "0.4.6"
+log = "0.4.10"
 env_logger = "0.6.1"
 structopt = "0.2"
 termcolor = "1"
