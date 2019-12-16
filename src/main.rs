@@ -574,7 +574,7 @@ fn main() -> Result<(), AppError> {
         "--untracked-files=no",
     ];
     if opts.show_untracked {
-        git_args[4] = "--untracked-files=all";
+        git_args[4] = "--untracked-files=normal";
     }
     debug!("Cmd: {:?}", git_args);
 

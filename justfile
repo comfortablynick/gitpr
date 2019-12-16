@@ -1,6 +1,6 @@
 #!/usr/bin/env just --justfile
 bin_name := 'gitpr'
-dev := '1'
+dev := '0'
 
 alias r := run
 alias b := build
