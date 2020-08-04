@@ -1,3 +1,7 @@
+//! Print git repo status. Handy for shell prompt.
+mod logger;
+mod util;
+
 use log::{debug, info, trace};
 use std::{
     env,
@@ -8,11 +12,9 @@ use std::{
 };
 use structopt::StructOpt;
 use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
+use util::Result;
 
-mod logger;
-mod tests;
-mod util;
-use util::AppError;
+// TODO: Make various functions accept a generic write trait
 
 // Constants + globals
 const PROG: &str = env!("CARGO_PKG_NAME");
@@ -173,7 +175,7 @@ impl Repo {
     }
 
     // TODO: simplify this -- does it have to be written to the Repo struct?
-    fn git_root_dir(&mut self) -> Result<String, AppError> {
+    fn git_root_dir(&mut self) -> Result<String> {
         if let Some(dir) = self.git_base_dir.clone() {
             return Ok(dir);
         }
@@ -240,7 +242,7 @@ impl Repo {
     }
 
     /// Write formatted branch to buffer
-    fn fmt_branch(&self, buf: &mut Buffer) -> Result<(), AppError> {
+    fn fmt_branch(&self, buf: &mut Buffer) -> Result {
         if let Some(s) = &self.branch {
             buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BLUE))))?;
             write!(buf, "{}", s)?;
@@ -249,14 +251,14 @@ impl Repo {
     }
 
     /// Write branch glyph to buffer
-    fn fmt_branch_glyph(&self, buf: &mut Buffer) -> Result<(), AppError> {
+    fn fmt_branch_glyph(&self, buf: &mut Buffer) -> Result {
         buf.set_color(&ColorSpec::new())?;
         write!(buf, "{}", Repo::BRANCH_GLYPH)?;
         Ok(())
     }
 
     /// Write formatted commit to buffer
-    fn fmt_commit(&self, buf: &mut Buffer, len: usize) -> Result<(), AppError> {
+    fn fmt_commit(&self, buf: &mut Buffer, len: usize) -> Result {
         match &self.commit {
             Some(s) => {
                 buf.set_color(
@@ -276,7 +278,7 @@ impl Repo {
     }
 
     /// Write formatted ahead/behind details to buffer
-    fn fmt_ahead_behind(&self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+    fn fmt_ahead_behind(&self, buf: &mut Buffer, indicators_only: bool) -> Result {
         if self.ahead != 0 {
             write!(buf, "{}", Repo::AHEAD_GLYPH)?;
             if !indicators_only {
@@ -293,11 +295,7 @@ impl Repo {
     }
 
     /// Write formatted +n/-n git diff numstat details to buffer
-    fn fmt_diff_numstat(
-        &mut self,
-        buf: &mut Buffer,
-        indicators_only: bool,
-    ) -> Result<(), AppError> {
+    fn fmt_diff_numstat(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
         if !self.unstaged.has_changed() || indicators_only {
             return Ok(());
         }
@@ -318,7 +316,7 @@ impl Repo {
     }
 
     /// Write formatted stash details to buffer
-    fn fmt_stash(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+    fn fmt_stash(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
         let mut git = self.git_root_dir()?;
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
@@ -337,7 +335,7 @@ impl Repo {
     }
 
     /// Write formatted untracked indicator and/or count to buffer
-    fn fmt_untracked(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+    fn fmt_untracked(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
         if self.untracked > 0 {
             buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(245))))?;
             write!(buf, "{}", Repo::UNTRACKED_GLYPH)?;
@@ -349,7 +347,7 @@ impl Repo {
     }
 
     /// Write formatted unmerged files indicator and/or count to buffer
-    fn fmt_unmerged(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+    fn fmt_unmerged(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
         if self.unmerged > 0 {
             buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(196))))?;
             write!(buf, "{}", Repo::UNMERGED_GLYPH)?;
@@ -361,7 +359,7 @@ impl Repo {
     }
 
     /// Write formatted upstream to buffer
-    fn fmt_upstream(&self, buf: &mut Buffer) -> Result<(), AppError> {
+    fn fmt_upstream(&self, buf: &mut Buffer) -> Result {
         if let Some(r) = &self.upstream {
             buf.set_color(&ColorSpec::new())?;
             write!(buf, "{}", r)?;
@@ -383,7 +381,7 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self, buf: &mut Buffer, indicators_only: bool) -> Result<(), AppError> {
+    fn fmt_modified(&self, buf: &mut Buffer, indicators_only: bool) -> Result {
         if self.has_changed() {
             buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(RED))))?;
             write!(buf, "{}", Repo::MODIFIED_GLYPH)?;
@@ -404,7 +402,7 @@ impl GitArea {
 }
 
 /// Query for git tag, use in simple or regular options
-fn git_tag() -> Result<String, AppError> {
+fn git_tag() -> Result<String> {
     let cmd = exec(&["git", "describe", "--tags", "--exact-match"])?;
     let tag = str::from_utf8(&cmd.stdout)?.trim_end().to_string();
     Ok(tag)
@@ -432,7 +430,7 @@ fn exec(cmd: &[&str]) -> io::Result<Output> {
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output(buf: &mut Buffer, git_status: &str) -> Result<(), AppError> {
+fn simple_output(buf: &mut Buffer, git_status: &str) -> Result {
     let mut raw_branch = "";
     let mut dirty = false;
     for line in git_status.lines() {
@@ -469,7 +467,7 @@ fn simple_output(buf: &mut Buffer, git_status: &str) -> Result<(), AppError> {
 }
 
 /// Print output based on parsing of --format string
-fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppError> {
+fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
     let mut fmt_str = args.format.chars();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
@@ -500,7 +498,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result<(), AppErro
     Ok(())
 }
 
-fn main() -> Result<(), AppError> {
+fn main() -> Result {
     let args = Arg::from_args();
     let mut opts: Opt = Default::default();
     let bufwtr = if args.no_color {
@@ -588,4 +586,35 @@ fn main() -> Result<(), AppError> {
     print_output(ri, args, &mut buf)?;
     bufwtr.print(&buf)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_clean() {
+        let clean_status = "## master...origin/master";
+        let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\n";
+
+        let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+        let mut buf = bufwtr.buffer();
+        simple_output(&mut buf, clean_status).unwrap();
+
+        assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_simple_dirty() {
+        let dirty_status = "## master...origin/master
+ M src/main.rs
+?? src/tests.rs";
+        let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\u{1b}[0m\u{1b}[38;5;124m*\n";
+
+        let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
+        let mut buf = bufwtr.buffer();
+        simple_output(&mut buf, dirty_status).unwrap();
+
+        assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
+    }
 }
