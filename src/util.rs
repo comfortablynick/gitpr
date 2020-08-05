@@ -1,4 +1,4 @@
-pub type Result<T = ()> = std::result::Result<T, AppError>;
+// pub type Result<T = ()> = std::result::Result<T, AppError>;
 
 #[derive(Debug)]
 pub struct AppError {

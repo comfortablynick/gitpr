@@ -1,23 +1,22 @@
 //! Print git repo status. Handy for shell prompt.
 mod logger;
-mod util;
 
-use log::{debug, info, trace};
+use anyhow::Context;
+use clap::{AppSettings, ArgSettings, Clap};
+#[allow(unused_imports)]
+use git2::{Error, ErrorCode, Repository, StatusOptions, SubmoduleIgnore};
+use log::{debug, info, warn};
 use std::{
     env,
-    io::{self, Write},
+    io::Write,
     path::PathBuf,
     process::{self, Command, Output, Stdio},
     str,
 };
-use structopt::StructOpt;
 use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
-use util::Result;
+type Result<T = ()> = anyhow::Result<T>;
 
 // TODO: Make various functions accept a generic write trait
-
-// Constants + globals
-const PROG: &str = env!("CARGO_PKG_NAME");
 const FORMAT_STRING_USAGE: &str = "\
 Tokenized string may contain:
 ------------------------------
@@ -35,7 +34,6 @@ Tokenized string may contain:
 %t  stashed files indicator
 ------------------------------
 ";
-// Colors
 const BLUE: u8 = 12;
 const RED: u8 = 124;
 const BOLD_SILVER: u8 = 188;
@@ -57,51 +55,55 @@ struct Opt {
     show_vcs: bool,
 }
 
-#[derive(StructOpt, Debug)]
-#[structopt(raw(name = "PROG"), about = "git repo status for shell prompt")]
+#[derive(Clap, Debug)]
+#[clap(author, about, version, setting = AppSettings::ColoredHelp)]
 struct Arg {
     /// Debug verbosity (ex: -v, -vv, -vvv)
-    #[structopt(short = "v", long = "verbose", parse(from_occurrences))]
+    #[clap(short, long, parse(from_occurrences))]
     verbose: u8,
 
     /// Silence debug log output
-    #[structopt(short = "q", long = "quiet")]
+    #[clap(short, long)]
     quiet: bool,
 
     /// Show indicators instead of numeric values.
     ///
     /// Does not apply to '%d' (diff), which always uses numeric values
-    #[structopt(short = "i", long = "indicators-only")]
+    #[clap(short, long)]
     indicators_only: bool,
 
     /// Disable color in output
-    #[structopt(short = "n", long = "no-color")]
+    #[clap(short, long)]
     no_color: bool,
 
     /// Simple mode (similar to factory git prompt)
     ///
     /// Does not accept format string (-f, --format)
-    #[structopt(short = "s", long = "simple")]
+    #[clap(short, long = "simple")]
     simple_mode: bool,
 
+    /// Use git2 library instead of parsing `git` command output
+    #[clap(short, long)]
+    library: bool,
+
     /// Format print-f style string
-    #[structopt(
-        short = "f",
-        long = "format",
+    #[clap(
+        short,
+        long,
+        value_name = "F-STRING",
         default_value = "%g %b@%c %a %m %d %s %u %t %U",
-        raw(long_help = "FORMAT_STRING_USAGE")
+        long_about = FORMAT_STRING_USAGE
     )]
     format: String,
 
     /// Directory to check for status, if not current dir
-    #[structopt(short = "d", long = "dir")]
-    dir: Option<PathBuf>,
+    #[clap(short, long, value_name = "PATH", env = "PWD", setting = ArgSettings::HideEnvValues)]
+    dir: PathBuf,
 }
 
 /// Hold status of git repo attributes
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Repo {
-    working_dir: Option<PathBuf>,
     git_base_dir: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
@@ -120,7 +122,7 @@ struct Repo {
 }
 
 /// Hold status of specific git area (staged, unstaged)
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct GitArea {
     modified: u32,
     added: u32,
@@ -141,39 +143,6 @@ impl Repo {
     // const DIRTY_GLYPH: char = '✘';
     // const CLEAN_GLYPH: char = '✔';
 
-    fn new() -> Repo {
-        Repo {
-            working_dir: None,
-            git_base_dir: None,
-            branch: None,
-            commit: None,
-            tag: None,
-            remote: None,
-            upstream: None,
-            stashed: 0,
-            ahead: 0,
-            behind: 0,
-            untracked: 0,
-            unmerged: 0,
-            insertions: 0,
-            deletions: 0,
-            unstaged: GitArea {
-                modified: 0,
-                added: 0,
-                deleted: 0,
-                renamed: 0,
-                copied: 0,
-            },
-            staged: GitArea {
-                modified: 0,
-                added: 0,
-                deleted: 0,
-                renamed: 0,
-                copied: 0,
-            },
-        }
-    }
-
     // TODO: simplify this -- does it have to be written to the Repo struct?
     fn git_root_dir(&mut self) -> Result<String> {
         if let Some(dir) = self.git_base_dir.clone() {
@@ -185,14 +154,16 @@ impl Repo {
         Ok(output.trim().to_string())
     }
 
-    fn git_diff_numstat(&mut self) {
-        let cmd = exec(&["git", "diff", "--numstat"]).expect("error calling `git diff --numstat`");
-        let output = String::from_utf8(cmd.stdout).unwrap_or_default();
+    /// Get chunk insertions/deletions
+    fn git_diff_numstat(&mut self) -> Result {
+        let cmd = exec(&["git", "diff", "--numstat"])?;
+        let output = String::from_utf8(cmd.stdout)?;
         for line in output.lines() {
             let mut split = line.split_whitespace();
             self.insertions += split.next().unwrap_or_default().parse().unwrap_or(0);
             self.deletions += split.next().unwrap_or_default().parse().unwrap_or(0);
         }
+        Ok(())
     }
 
     /// Parse git status by line
@@ -301,7 +272,7 @@ impl Repo {
         }
         buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BOLD_SILVER))))?;
         if self.insertions == 0 && self.deletions == 0 {
-            self.git_diff_numstat();
+            self.git_diff_numstat()?;
         }
         if self.insertions > 0 {
             write!(buf, "+{}", self.insertions)?;
@@ -335,7 +306,10 @@ impl Repo {
     }
 
     /// Write formatted untracked indicator and/or count to buffer
-    fn fmt_untracked(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
+    fn fmt_untracked<T>(&mut self, buf: &mut T, indicators_only: bool) -> Result
+    where
+        T: std::io::Write + termcolor::WriteColor,
+    {
         if self.untracked > 0 {
             buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(245))))?;
             write!(buf, "{}", Repo::UNTRACKED_GLYPH)?;
@@ -409,22 +383,26 @@ fn git_tag() -> Result<String> {
 }
 
 /// Spawn subprocess for `cmd` and access stdout/stderr
-/// Fails if process output != 0
-fn exec(cmd: &[&str]) -> io::Result<Output> {
-    let command = Command::new(&cmd[0])
-        .args(cmd.get(1..).expect("missing args in cmd"))
+fn exec(command: &[&str]) -> Result<Output> {
+    let mut cmd = command.into_iter();
+    let mut spawn = Command::new(cmd.next().context("exec: command missing")?);
+    while let Some(arg) = cmd.next() {
+        spawn.arg(arg);
+    }
+    let result = spawn
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
-    let result = command.wait_with_output()?;
+        .spawn()?
+        .wait_with_output()
+        .with_context(|| format!("Command failed: [{:?}]", spawn))?;
 
     if !result.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            str::from_utf8(&result.stderr)
-                .unwrap_or("cmd returned non-zero status")
-                .trim_end(),
-        ));
+        warn!(
+            "Command returned non-zero status: [{:?}]; Result: {:?}",
+            spawn, result
+        );
+    } else {
+        debug!("Command: [{:?}]; Result: {:?}", spawn, result);
     }
     Ok(result)
 }
@@ -472,7 +450,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
-                match &c {
+                match c {
                     'a' => ri.fmt_ahead_behind(buf, args.indicators_only)?,
                     'b' => ri.fmt_branch(buf)?,
                     'c' => ri.fmt_commit(buf, 7)?,
@@ -486,7 +464,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
                     'u' => ri.fmt_untracked(buf, args.indicators_only)?,
                     'U' => ri.fmt_unmerged(buf, args.indicators_only)?,
                     '%' => write!(buf, "%")?,
-                    &c => unreachable!("print_output: invalid flag: \"%{}\"", &c),
+                    _ => panic!("print_output: invalid flag: \"%{}\"", c),
                 }
             }
         } else {
@@ -499,7 +477,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
 }
 
 fn main() -> Result {
-    let args = Arg::from_args();
+    let args = Arg::parse();
     let mut opts: Opt = Default::default();
     let bufwtr = if args.no_color {
         termcolor::BufferWriter::stdout(ColorChoice::Never)
@@ -516,9 +494,7 @@ fn main() -> Result {
         env::set_var("TERM", "dumb");
     };
 
-    if let Some(d) = &args.dir {
-        env::set_current_dir(d)?;
-    };
+    env::set_current_dir(&args.dir)?;
 
     if args.simple_mode {
         let status_cmd = exec(&[
@@ -563,6 +539,11 @@ fn main() -> Result {
             }
         }
     }
+    if args.library {
+        debug!("Using git2 instead of git command");
+        // let repo = Repository::open(args.dir);
+        return Ok(());
+    }
     // TODO: possibly use rev-parse first
     let mut git_args = [
         "git",
@@ -577,10 +558,10 @@ fn main() -> Result {
     debug!("Cmd: {:?}", git_args);
 
     let git_status = exec(&git_args)?;
-    let mut ri = Repo::new();
+    let mut ri = Repo::default();
     ri.parse_status(str::from_utf8(&git_status.stdout)?);
 
-    trace!("{:#?}", &ri);
+    debug!("{:#?}", &ri);
     info!("{:#?}", &args);
 
     print_output(ri, args, &mut buf)?;
