@@ -509,8 +509,7 @@ fn main() -> Result {
             "--untracked-files=no",
         ])?;
         let status = str::from_utf8(&status_cmd.stdout)?;
-        simple_output(status)?;
-        // bufwtr.print(&buf)?;
+        println!("{}", simple_output(status)?);
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
