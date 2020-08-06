@@ -1,0 +1,99 @@
+; vim:set fenc=utf-8 ft=dosini:
+; written with just2tasks: Wed Aug  5 15:36:04 2020
+
+[autobuild]
+command=just autobuild
+cwd=<root>
+output=terminal
+save=1
+
+[build]
+command=just build
+cwd=<root>
+output=terminal
+save=1
+
+[doc]
+command=just doc
+cwd=<root>
+output=terminal
+save=1
+
+[docs]
+command=just docs
+cwd=<root>
+output=terminal
+save=1
+
+[docslive]
+command=just docslive
+cwd=<root>
+output=terminal
+save=1
+
+[docw]
+command=just docw
+cwd=<root>
+output=terminal
+save=1
+
+[fix]
+command=just fix
+cwd=<root>
+output=terminal
+save=1
+
+[help]
+command=just help
+cwd=<root>
+output=terminal
+save=1
+
+[install]
+command=just install
+cwd=<root>
+output=terminal
+save=1
+
+[longhelp]
+command=just longhelp
+cwd=<root>
+output=terminal
+save=1
+
+[rb]
+command=just rb
+cwd=<root>
+output=terminal
+save=1
+
+[run]
+command=just run
+cwd=<root>
+output=terminal
+save=1
+
+[runq]
+command=just runq
+cwd=<root>
+output=terminal
+save=1
+
+[runv]
+command=just runv
+cwd=<root>
+output=terminal
+save=1
+
+[runvv]
+command=just runvv
+cwd=<root>
+output=terminal
+save=1
+
+[test]
+command=just test
+cwd=<root>
+output=terminal
+save=1
+

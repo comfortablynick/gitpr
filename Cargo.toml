@@ -11,4 +11,7 @@ env_logger = "0.7.1"
 clap = "3.0.0-beta.1"
 termcolor = "1.1.0"
 anyhow = "1.0.32"
-git2 = "0.13.8"
+ansi_term = "0.12"
+
+[dev-dependencies]
+pretty_assertions = "0.6"

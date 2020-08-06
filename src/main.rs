@@ -1,10 +1,13 @@
 //! Print git repo status. Handy for shell prompt.
 mod logger;
 
+#[allow(unused_imports)]
+use ansi_term::{
+    Color::Fixed,
+    {ANSIString, ANSIStrings},
+};
 use anyhow::Context;
 use clap::{AppSettings, ArgSettings, Clap};
-#[allow(unused_imports)]
-use git2::{Error, ErrorCode, Repository, StatusOptions, SubmoduleIgnore};
 use log::{debug, info, warn};
 use std::{
     env,
@@ -14,9 +17,11 @@ use std::{
     str,
 };
 use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
+
+/// `anyhow::Result` with default type of `()`
 type Result<T = ()> = anyhow::Result<T>;
 
-// TODO: Make various functions accept a generic write trait
+/// Help message for format string token
 const FORMAT_STRING_USAGE: &str = "\
 Tokenized string may contain:
 ------------------------------
@@ -34,8 +39,13 @@ Tokenized string may contain:
 %t  stashed files indicator
 ------------------------------
 ";
+/// Blue ANSI color
 const BLUE: u8 = 12;
+/// Red ANSI color
 const RED: u8 = 124;
+/// Cyan ANSI color (intense)
+const CYAN: u8 = 14;
+/// Bold silver ANSI color
 const BOLD_SILVER: u8 = 188;
 
 /// Options from format string
@@ -55,6 +65,7 @@ struct Opt {
     show_vcs: bool,
 }
 
+/// Command line configuration
 #[derive(Clap, Debug)]
 #[clap(author, about, version, setting = AppSettings::ColoredHelp)]
 struct Arg {
@@ -81,10 +92,6 @@ struct Arg {
     /// Does not accept format string (-f, --format)
     #[clap(short, long = "simple")]
     simple_mode: bool,
-
-    /// Use git2 library instead of parsing `git` command output
-    #[clap(short, long)]
-    library: bool,
 
     /// Format print-f style string
     #[clap(
@@ -408,7 +415,7 @@ fn exec(command: &[&str]) -> Result<Output> {
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output(buf: &mut Buffer, git_status: &str) -> Result {
+fn simple_output(git_status: &str) -> Result<String> {
     let mut raw_branch = "";
     let mut dirty = false;
     for line in git_status.lines() {
@@ -421,7 +428,7 @@ fn simple_output(buf: &mut Buffer, git_status: &str) -> Result {
     }
     let split = raw_branch.split("...").collect::<Vec<&str>>();
     let branch = match split.get(0) {
-        Some(b) if b.starts_with("HEAD") => git_tag().unwrap_or_else(|_| String::from("unknown")),
+        Some(b) if b.starts_with("HEAD") => git_tag().unwrap_or_else(|_| "unknown".to_string()),
         Some(b) => b.to_string(),
         None => "unknown".to_string(),
     };
@@ -429,19 +436,15 @@ fn simple_output(buf: &mut Buffer, git_status: &str) -> Result {
         "Raw: {}; Split: {:?}; Branch: {}",
         raw_branch, split, branch
     );
-    let mut color = ColorSpec::new();
-    color.set_fg(Some(Color::Cyan));
-    color.set_intense(true);
-
-    buf.set_color(&color)?;
-    write!(buf, "({})", branch)?;
+    let mut strings: Vec<ANSIString> = vec![
+        Fixed(CYAN).paint("("),
+        Fixed(CYAN).paint(branch),
+        Fixed(CYAN).paint(")"),
+    ];
     if dirty {
-        color.set_fg(Some(Color::Ansi256(RED)));
-        buf.set_color(&color)?;
-        write!(buf, "*")?;
+        strings.push(Fixed(RED).paint("*"));
     }
-    writeln!(buf)?;
-    Ok(())
+    Ok(ANSIStrings(&strings).to_string())
 }
 
 /// Print output based on parsing of --format string
@@ -476,6 +479,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
     Ok(())
 }
 
+/// Entry point
 fn main() -> Result {
     let args = Arg::parse();
     let mut opts: Opt = Default::default();
@@ -505,8 +509,8 @@ fn main() -> Result {
             "--untracked-files=no",
         ])?;
         let status = str::from_utf8(&status_cmd.stdout)?;
-        simple_output(&mut buf, status)?;
-        bufwtr.print(&buf)?;
+        simple_output(status)?;
+        // bufwtr.print(&buf)?;
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
@@ -539,11 +543,7 @@ fn main() -> Result {
             }
         }
     }
-    if args.library {
-        debug!("Using git2 instead of git command");
-        // let repo = Repository::open(args.dir);
-        return Ok(());
-    }
+
     // TODO: possibly use rev-parse first
     let mut git_args = [
         "git",
@@ -572,30 +572,27 @@ fn main() -> Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_simple_clean() {
-        let clean_status = "## master...origin/master";
-        let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\n";
+    fn test_simple_clean() -> Result {
+        const CLEAN: &str = "## master...origin/master";
+        let expected = "\u{1b}[38;5;14m(master)\u{1b}[0m";
 
-        let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
-        let mut buf = bufwtr.buffer();
-        simple_output(&mut buf, clean_status).unwrap();
-
-        assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
+        let result = simple_output(CLEAN)?;
+        assert_eq!(result, expected);
+        Ok(())
     }
 
     #[test]
-    fn test_simple_dirty() {
-        let dirty_status = "## master...origin/master
+    fn test_simple_dirty() -> Result {
+        const DIRTY: &str = "## master...origin/master
  M src/main.rs
 ?? src/tests.rs";
-        let expected = "\u{1b}[0m\u{1b}[38;5;14m(master)\u{1b}[0m\u{1b}[38;5;124m*\n";
+        let expected = "\u{1b}[38;5;14m(master)\u{1b}[38;5;124m*\u{1b}[0m";
 
-        let bufwtr = termcolor::BufferWriter::stdout(ColorChoice::Auto);
-        let mut buf = bufwtr.buffer();
-        simple_output(&mut buf, dirty_status).unwrap();
-
-        assert_eq!(str::from_utf8(buf.as_slice()).unwrap(), expected);
+        let result = simple_output(DIRTY)?;
+        assert_eq!(result, expected);
+        Ok(())
     }
 }
