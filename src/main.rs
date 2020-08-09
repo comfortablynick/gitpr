@@ -415,7 +415,7 @@ fn exec(command: &[&str]) -> Result<Output> {
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output(git_status: &str) -> Result<String> {
+fn simple_output(git_status: &str, buf: &mut Vec<ANSIString>) {
     let mut raw_branch = "";
     let mut dirty = false;
     for line in git_status.lines() {
@@ -436,15 +436,12 @@ fn simple_output(git_status: &str) -> Result<String> {
         "Raw: {}; Split: {:?}; Branch: {}",
         raw_branch, split, branch
     );
-    let mut strings: Vec<ANSIString> = vec![
-        Fixed(CYAN).paint("("),
-        Fixed(CYAN).paint(branch),
-        Fixed(CYAN).paint(")"),
-    ];
+    buf.push(Fixed(CYAN).paint("("));
+    buf.push(Fixed(CYAN).paint(branch));
+    buf.push(Fixed(CYAN).paint(")"));
     if dirty {
-        strings.push(Fixed(RED).paint("*"));
+        buf.push(Fixed(RED).paint("*"));
     }
-    Ok(ANSIStrings(&strings).to_string())
 }
 
 /// Print output based on parsing of --format string
@@ -509,7 +506,9 @@ fn main() -> Result {
             "--untracked-files=no",
         ])?;
         let status = str::from_utf8(&status_cmd.stdout)?;
-        println!("{}", simple_output(status)?);
+        let mut buf = Vec::new();
+        simple_output(status, &mut buf);
+        println!("{}", ANSIStrings(&buf));
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
@@ -578,7 +577,9 @@ mod tests {
         const CLEAN: &str = "## master...origin/master";
         let expected = "\u{1b}[38;5;14m(master)\u{1b}[0m";
 
-        let result = simple_output(CLEAN)?;
+        let mut buf = Vec::new();
+        simple_output(CLEAN, &mut buf);
+        let result = ANSIStrings(&buf).to_string();
         assert_eq!(result, expected);
         Ok(())
     }
@@ -590,7 +591,9 @@ mod tests {
 ?? src/tests.rs";
         let expected = "\u{1b}[38;5;14m(master)\u{1b}[38;5;124m*\u{1b}[0m";
 
-        let result = simple_output(DIRTY)?;
+        let mut buf = Vec::new();
+        simple_output(DIRTY, &mut buf);
+        let result = ANSIStrings(&buf).to_string();
         assert_eq!(result, expected);
         Ok(())
     }
