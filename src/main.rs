@@ -1,21 +1,23 @@
 //! Print git repo status. Handy for shell prompt.
+#![allow(dead_code)]
 mod logger;
 
-#[allow(unused_imports)]
 use ansi_term::{
-    Color::Fixed,
-    {ANSIString, ANSIStrings},
+    ANSIString, ANSIStrings,
+    Color::{Black, Fixed, Green},
+    Style,
 };
-use anyhow::Context;
+use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
 use log::{debug, info, warn};
 use std::{
     env,
     io::Write,
     path::PathBuf,
-    process::{self, Command, Output, Stdio},
+    process::{Command, Output, Stdio},
     str,
 };
+#[allow(unused_imports)]
 use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
 
 /// `anyhow::Result` with default type of `()`
@@ -220,75 +222,77 @@ impl Repo {
     }
 
     /// Write formatted branch to buffer
-    fn fmt_branch(&self, buf: &mut Buffer) -> Result {
+    fn fmt_branch(&self, buf: &mut Vec<ANSIString>) {
         if let Some(s) = &self.branch {
-            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BLUE))))?;
-            write!(buf, "{}", s)?;
+            buf.push(Fixed(BLUE).paint(s.to_string()));
+            // buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BLUE))))?;
+            // write!(buf, "{}", s)?;
         }
-        Ok(())
     }
 
     /// Write branch glyph to buffer
-    fn fmt_branch_glyph(&self, buf: &mut Buffer) -> Result {
-        buf.set_color(&ColorSpec::new())?;
-        write!(buf, "{}", Repo::BRANCH_GLYPH)?;
-        Ok(())
+    fn fmt_branch_glyph(&self, buf: &mut Vec<ANSIString>) {
+        let mut s = String::with_capacity(3);
+        s.push(Repo::BRANCH_GLYPH);
+        buf.push(ANSIString::from(s));
     }
 
     /// Write formatted commit to buffer
-    fn fmt_commit(&self, buf: &mut Buffer, len: usize) -> Result {
-        match &self.commit {
-            Some(s) => {
-                buf.set_color(
-                    ColorSpec::new()
-                        .set_fg(Some(Color::Black))
-                        .set_bg(Some(Color::Green)),
-                )?;
-                if s == "(initial)" {
-                    write!(buf, "(initial)")?;
-                } else {
-                    write!(buf, "{}", s[..len].to_string())?;
-                }
+    fn fmt_commit(&self, buf: &mut Vec<ANSIString>, len: usize) {
+        if let Some(commit) = &self.commit {
+            let display = if commit == "(initial)" {
+                "(initial)"
+            } else {
+                commit[..len].into()
             }
-            None => (),
+            .to_string();
+            let style = Style::new().fg(Black).on(Green);
+            buf.push(style.paint(display));
         }
-        Ok(())
     }
 
     /// Write formatted ahead/behind details to buffer
-    fn fmt_ahead_behind(&self, buf: &mut Buffer, indicators_only: bool) -> Result {
+    fn fmt_ahead_behind(&self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
+        let style = Style::default();
+        if self.ahead + self.behind == 0 {
+            return;
+        }
         if self.ahead != 0 {
-            write!(buf, "{}", Repo::AHEAD_GLYPH)?;
+            let mut glyph = String::with_capacity(3);
+            glyph.push(Repo::AHEAD_GLYPH);
+            buf.push(style.paint(glyph));
             if !indicators_only {
-                write!(buf, "{}", &self.ahead)?;
+                buf.push(style.paint(format!("{}", &self.ahead)));
             }
         }
         if self.behind != 0 {
-            write!(buf, "{}", Repo::BEHIND_GLYPH)?;
+            let mut glyph = String::with_capacity(3);
+            glyph.push(Repo::BEHIND_GLYPH);
+            buf.push(style.paint(glyph));
             if !indicators_only {
-                write!(buf, "{}", self.behind)?;
+                buf.push(style.paint(format!("{}", &self.behind)));
             }
         }
-        Ok(())
     }
 
     /// Write formatted +n/-n git diff numstat details to buffer
-    fn fmt_diff_numstat(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
+    fn fmt_diff_numstat(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) -> Result {
         if !self.unstaged.has_changed() || indicators_only {
             return Ok(());
         }
-        buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BOLD_SILVER))))?;
+        let style = Fixed(BOLD_SILVER);
         if self.insertions == 0 && self.deletions == 0 {
             self.git_diff_numstat()?;
         }
         if self.insertions > 0 {
-            write!(buf, "+{}", self.insertions)?;
+            let mut ins = format!("+{}", self.insertions);
             if self.deletions > 0 {
-                write!(buf, "/")?;
+                ins.push('/');
             }
-            if self.deletions > 0 {
-                write!(buf, "-{}", self.deletions)?;
-            }
+            buf.push(style.paint(ins));
+        }
+        if self.deletions > 0 {
+            buf.push(style.paint(format!("-{}", self.deletions)));
         }
         Ok(())
     }
@@ -362,15 +366,17 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self, buf: &mut Buffer, indicators_only: bool) -> Result {
-        if self.has_changed() {
-            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(RED))))?;
-            write!(buf, "{}", Repo::MODIFIED_GLYPH)?;
-            if !indicators_only {
-                write!(buf, "{}", self.change_ct())?;
-            }
+    fn fmt_modified(&self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
+        if !self.has_changed() {
+            return;
         }
-        Ok(())
+        let style = Fixed(RED);
+        let mut glyph = String::with_capacity(3);
+        glyph.push(Repo::MODIFIED_GLYPH);
+        buf.push(style.paint(glyph));
+        if !indicators_only {
+            buf.push(style.paint(format!("{}", self.change_ct())));
+        }
     }
 
     fn has_changed(&self) -> bool {
@@ -445,34 +451,36 @@ fn simple_output(git_status: &str, buf: &mut Vec<ANSIString>) {
 }
 
 /// Print output based on parsing of --format string
-fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
+fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
     let mut fmt_str = args.format.chars();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match c {
-                    'a' => ri.fmt_ahead_behind(buf, args.indicators_only)?,
-                    'b' => ri.fmt_branch(buf)?,
-                    'c' => ri.fmt_commit(buf, 7)?,
+                    'a' => ri.fmt_ahead_behind(buf, args.indicators_only),
+                    'b' => ri.fmt_branch(buf),
+                    'c' => ri.fmt_commit(buf, 7),
                     'd' => ri.fmt_diff_numstat(buf, args.indicators_only)?,
-                    'g' => ri.fmt_branch_glyph(buf)?,
-                    'm' => ri.unstaged.fmt_modified(buf, args.indicators_only)?,
-                    'n' => write!(buf, "git")?,
-                    'r' => ri.fmt_upstream(buf)?,
-                    's' => ri.staged.fmt_modified(buf, args.indicators_only)?,
-                    't' => ri.fmt_stash(buf, args.indicators_only)?,
-                    'u' => ri.fmt_untracked(buf, args.indicators_only)?,
-                    'U' => ri.fmt_unmerged(buf, args.indicators_only)?,
-                    '%' => write!(buf, "%")?,
-                    _ => panic!("print_output: invalid flag: \"%{}\"", c),
+                    'g' => ri.fmt_branch_glyph(buf),
+                    'm' => ri.unstaged.fmt_modified(buf, args.indicators_only),
+                    'n' => buf.push(Style::default().paint("git")),
+                    // 'r' => ri.fmt_upstream(buf)?,
+                    // 's' => ri.staged.fmt_modified(buf, args.indicators_only)?,
+                    // 't' => ri.fmt_stash(buf, args.indicators_only)?,
+                    // 'u' => ri.fmt_untracked(buf, args.indicators_only)?,
+                    // 'U' => ri.fmt_unmerged(buf, args.indicators_only)?,
+                    '%' => buf.push(Style::default().paint("%")),
+                    _ => unreachable!(
+                        "invalid format token allowed to reach print_output: \"%{}\"",
+                        c
+                    ),
                 }
             }
         } else {
-            buf.set_color(&ColorSpec::new())?;
-            write!(buf, "{}", c)?;
+            buf.push(Style::default().paint(format!("{}", c)));
         }
     }
-    writeln!(buf)?;
+    buf.push(Style::default().paint("\n"));
     Ok(())
 }
 
@@ -480,12 +488,7 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Buffer) -> Result {
 fn main() -> Result {
     let args = Arg::parse();
     let mut opts: Opt = Default::default();
-    let bufwtr = if args.no_color {
-        termcolor::BufferWriter::stdout(ColorChoice::Never)
-    } else {
-        termcolor::BufferWriter::stdout(ColorChoice::Auto)
-    };
-    let mut buf = bufwtr.buffer();
+    let mut buf = Vec::new();
 
     if !args.quiet {
         logger::init_logger(args.verbose);
@@ -516,7 +519,7 @@ fn main() -> Result {
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
-                match &c {
+                match c {
                     'a' => opts.show_ahead_behind = true,
                     'b' => opts.show_branch = true,
                     'c' => opts.show_commit = true,
@@ -530,12 +533,12 @@ fn main() -> Result {
                     'u' => opts.show_untracked = true,
                     'U' => opts.show_unmerged = true,
                     '%' => continue,
-                    &c => {
-                        eprintln!(
-                            "Invalid format string token: '%{}'\n{}",
-                            &c, FORMAT_STRING_USAGE
-                        );
-                        process::exit(1);
+                    _ => {
+                        return Err(format_err!(
+                            "invalid format string token \"%{}\"\n{}",
+                            c,
+                            FORMAT_STRING_USAGE
+                        ));
                     }
                 }
             }
@@ -563,7 +566,7 @@ fn main() -> Result {
     info!("{:#?}", &args);
 
     print_output(ri, args, &mut buf)?;
-    bufwtr.print(&buf)?;
+    print!("{}", ANSIStrings(&buf));
     Ok(())
 }
 
