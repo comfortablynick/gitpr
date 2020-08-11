@@ -1,8 +1,14 @@
 ; vim:set fenc=utf-8 ft=dosini:
-; written with just2tasks: Wed Aug  5 15:36:04 2020
+; written with just2tasks: Tue Aug 11 14:21:42 2020
 
 [autobuild]
 command=just autobuild
+cwd=<root>
+output=terminal
+save=1
+
+[bench]
+command=just bench
 cwd=<root>
 output=terminal
 save=1

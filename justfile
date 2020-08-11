@@ -29,8 +29,12 @@ docs +PORT='40000':
 docslive:
     light-server -c .lightrc
 
-# rebuild docs and start simple static server that watches for changes (in parallel)
+# rebuild docs and start simple static server that watches for changes
 docw +PORT='40000':
+    cargo watch -x 'doc --color=always' -s "http target/doc -p {{PORT}}"
+
+# rebuild docs and start simple static server that watches for changes (in parallel)
+docwp +PORT='40000':
     parallel --lb ::: "cargo watch -x 'doc --color=always'" "http target/doc -p {{PORT}}"
 
 # install binary to ~/.cargo/bin
@@ -65,8 +69,13 @@ longhelp:
 rb +args='':
     ./target/debug/{{bin_name}} {{args}}
 
+# run tests
 test:
     cargo test
+
+# run benchmarks
+bench:
+    cargo bench
 
 fix:
     cargo fix

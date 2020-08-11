@@ -1,24 +1,16 @@
 //! Print git repo status. Handy for shell prompt.
-#![allow(dead_code)]
 mod logger;
 
 use ansi_term::{
     ANSIString, ANSIStrings,
-    Color::{Black, Fixed, Green},
+    Color::{Black, Fixed, Green, Red, Yellow},
     Style,
 };
 use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
-use log::{debug, info, warn};
-use std::{
-    env,
-    io::Write,
-    path::PathBuf,
-    process::{Command, Output, Stdio},
-    str,
-};
-#[allow(unused_imports)]
-use termcolor::{Buffer, Color, ColorChoice, ColorSpec, WriteColor};
+use duct::cmd;
+use log::{debug, info};
+use std::{convert::TryFrom, env, path::PathBuf, str};
 
 /// `anyhow::Result` with default type of `()`
 type Result<T = ()> = anyhow::Result<T>;
@@ -41,14 +33,14 @@ Tokenized string may contain:
 %t  stashed files indicator
 ------------------------------
 ";
-/// Blue ANSI color
+/// Blue ANSI color (intense)
 const BLUE: u8 = 12;
-/// Red ANSI color
-const RED: u8 = 124;
 /// Cyan ANSI color (intense)
 const CYAN: u8 = 14;
 /// Bold silver ANSI color
 const BOLD_SILVER: u8 = 188;
+/// Gray ANSI color
+const GRAY: u8 = 245;
 
 /// Options from format string
 #[derive(Debug, Default)]
@@ -113,7 +105,6 @@ struct Arg {
 /// Hold status of git repo attributes
 #[derive(Debug, Default)]
 struct Repo {
-    git_base_dir: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
     tag: Option<String>,
@@ -141,32 +132,23 @@ struct GitArea {
 }
 
 impl Repo {
-    const AHEAD_GLYPH: char = '⇡';
-    const BEHIND_GLYPH: char = '⇣';
-    const BRANCH_GLYPH: char = '';
-    const MODIFIED_GLYPH: char = 'Δ';
-    const STASH_GLYPH: char = '$';
-    const UNMERGED_GLYPH: char = '‼';
-    const UNTRACKED_GLYPH: char = '…';
+    const AHEAD_GLYPH: &'static str = "⇡";
+    const BEHIND_GLYPH: &'static str = "⇣";
+    const BRANCH_GLYPH: &'static str = "";
+    const MODIFIED_GLYPH: &'static str = "Δ";
+    const STASH_GLYPH: &'static str = "$";
+    const UNMERGED_GLYPH: &'static str = "‼";
+    const UNTRACKED_GLYPH: &'static str = "…";
 
-    // const DIRTY_GLYPH: char = '✘';
-    // const CLEAN_GLYPH: char = '✔';
-
-    // TODO: simplify this -- does it have to be written to the Repo struct?
     fn git_root_dir(&mut self) -> Result<String> {
-        if let Some(dir) = self.git_base_dir.clone() {
-            return Ok(dir);
-        }
-        let cmd = exec(&["git", "rev-parse", "--absolute-git-dir"])?;
-        let output = String::from_utf8(cmd.stdout)?;
-        self.git_base_dir = Some(output.clone());
-        Ok(output.trim().to_string())
+        cmd!("git", "rev-parse", "--absolute-git-dir")
+            .read()
+            .context("cannot get root dir of git repo")
     }
 
     /// Get chunk insertions/deletions
     fn git_diff_numstat(&mut self) -> Result {
-        let cmd = exec(&["git", "diff", "--numstat"])?;
-        let output = String::from_utf8(cmd.stdout)?;
+        let output = cmd!("git", "diff", "--numstat").read()?;
         for line in output.lines() {
             let mut split = line.split_whitespace();
             self.insertions += split.next().unwrap_or_default().parse().unwrap_or(0);
@@ -176,8 +158,8 @@ impl Repo {
     }
 
     /// Parse git status by line
-    fn parse_status(&mut self, gs: &str) {
-        for line in gs.lines() {
+    fn parse_status<S: AsRef<str>>(&mut self, gs: S) {
+        for line in gs.as_ref().lines() {
             let mut words = line.split_whitespace();
             while let Some(word) = words.next() {
                 match word {
@@ -225,16 +207,13 @@ impl Repo {
     fn fmt_branch(&self, buf: &mut Vec<ANSIString>) {
         if let Some(s) = &self.branch {
             buf.push(Fixed(BLUE).paint(s.to_string()));
-            // buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(BLUE))))?;
-            // write!(buf, "{}", s)?;
         }
     }
 
     /// Write branch glyph to buffer
     fn fmt_branch_glyph(&self, buf: &mut Vec<ANSIString>) {
-        let mut s = String::with_capacity(3);
-        s.push(Repo::BRANCH_GLYPH);
-        buf.push(ANSIString::from(s));
+        let style = Style::new();
+        buf.push(style.paint(Repo::BRANCH_GLYPH.to_string()));
     }
 
     /// Write formatted commit to buffer
@@ -258,19 +237,15 @@ impl Repo {
             return;
         }
         if self.ahead != 0 {
-            let mut glyph = String::with_capacity(3);
-            glyph.push(Repo::AHEAD_GLYPH);
-            buf.push(style.paint(glyph));
+            buf.push(style.paint(Repo::AHEAD_GLYPH));
             if !indicators_only {
-                buf.push(style.paint(format!("{}", &self.ahead)));
+                buf.push(style.paint(self.ahead.to_string()));
             }
         }
         if self.behind != 0 {
-            let mut glyph = String::with_capacity(3);
-            glyph.push(Repo::BEHIND_GLYPH);
-            buf.push(style.paint(glyph));
+            buf.push(style.paint(Repo::BEHIND_GLYPH));
             if !indicators_only {
-                buf.push(style.paint(format!("{}", &self.behind)));
+                buf.push(style.paint(self.behind.to_string()));
             }
         }
     }
@@ -285,20 +260,21 @@ impl Repo {
             self.git_diff_numstat()?;
         }
         if self.insertions > 0 {
-            let mut ins = format!("+{}", self.insertions);
+            buf.push(style.paint("+"));
+            buf.push(style.paint(self.insertions.to_string()));
             if self.deletions > 0 {
-                ins.push('/');
+                buf.push(style.paint("/"));
             }
-            buf.push(style.paint(ins));
         }
         if self.deletions > 0 {
-            buf.push(style.paint(format!("-{}", self.deletions)));
+            buf.push(style.paint("-"));
+            buf.push(style.paint(self.deletions.to_string()));
         }
         Ok(())
     }
 
     /// Write formatted stash details to buffer
-    fn fmt_stash(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
+    fn fmt_stash(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) -> Result {
         let mut git = self.git_root_dir()?;
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
@@ -306,50 +282,44 @@ impl Repo {
             .lines()
             .count();
         if st > 0 {
-            self.stashed = st as u32;
-            buf.set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))?;
-            write!(buf, "{}", Repo::STASH_GLYPH)?;
+            self.stashed = u32::try_from(st)?;
+            let style = Style::new().fg(Yellow);
+            buf.push(style.paint(Repo::STASH_GLYPH.to_string()));
             if !indicators_only {
-                write!(buf, "{}", st)?;
+                buf.push(style.paint(st.to_string()));
             }
         }
         Ok(())
     }
 
     /// Write formatted untracked indicator and/or count to buffer
-    fn fmt_untracked<T>(&mut self, buf: &mut T, indicators_only: bool) -> Result
-    where
-        T: std::io::Write + termcolor::WriteColor,
-    {
+    fn fmt_untracked(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
         if self.untracked > 0 {
-            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(245))))?;
-            write!(buf, "{}", Repo::UNTRACKED_GLYPH)?;
+            let style = Fixed(GRAY);
+            buf.push(style.paint(Repo::UNTRACKED_GLYPH.to_string()));
             if !indicators_only {
-                write!(buf, "{}", self.untracked)?;
+                buf.push(style.paint(self.untracked.to_string()));
             }
         }
-        Ok(())
     }
 
     /// Write formatted unmerged files indicator and/or count to buffer
-    fn fmt_unmerged(&mut self, buf: &mut Buffer, indicators_only: bool) -> Result {
+    fn fmt_unmerged(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
         if self.unmerged > 0 {
-            buf.set_color(ColorSpec::new().set_fg(Some(Color::Ansi256(196))))?;
-            write!(buf, "{}", Repo::UNMERGED_GLYPH)?;
+            let style = Red;
+            buf.push(style.paint(Repo::UNMERGED_GLYPH.to_string()));
             if !indicators_only {
-                write!(buf, "{}", self.unmerged)?;
+                buf.push(style.paint(self.unmerged.to_string()));
             }
         }
-        Ok(())
     }
 
     /// Write formatted upstream to buffer
-    fn fmt_upstream(&self, buf: &mut Buffer) -> Result {
+    fn fmt_upstream(&self, buf: &mut Vec<ANSIString>) {
         if let Some(r) = &self.upstream {
-            buf.set_color(&ColorSpec::new())?;
-            write!(buf, "{}", r)?;
+            let style = Style::new();
+            buf.push(style.paint(r.clone()));
         }
-        Ok(())
     }
 }
 
@@ -370,12 +340,10 @@ impl GitArea {
         if !self.has_changed() {
             return;
         }
-        let style = Fixed(RED);
-        let mut glyph = String::with_capacity(3);
-        glyph.push(Repo::MODIFIED_GLYPH);
-        buf.push(style.paint(glyph));
+        let style = Red;
+        buf.push(style.paint(Repo::MODIFIED_GLYPH));
         if !indicators_only {
-            buf.push(style.paint(format!("{}", self.change_ct())));
+            buf.push(style.paint(self.change_ct().to_string()));
         }
     }
 
@@ -390,41 +358,16 @@ impl GitArea {
 
 /// Query for git tag, use in simple or regular options
 fn git_tag() -> Result<String> {
-    let cmd = exec(&["git", "describe", "--tags", "--exact-match"])?;
-    let tag = str::from_utf8(&cmd.stdout)?.trim_end().to_string();
-    Ok(tag)
-}
-
-/// Spawn subprocess for `cmd` and access stdout/stderr
-fn exec(command: &[&str]) -> Result<Output> {
-    let mut cmd = command.into_iter();
-    let mut spawn = Command::new(cmd.next().context("exec: command missing")?);
-    while let Some(arg) = cmd.next() {
-        spawn.arg(arg);
-    }
-    let result = spawn
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?
-        .wait_with_output()
-        .with_context(|| format!("Command failed: [{:?}]", spawn))?;
-
-    if !result.status.success() {
-        warn!(
-            "Command returned non-zero status: [{:?}]; Result: {:?}",
-            spawn, result
-        );
-    } else {
-        debug!("Command: [{:?}]; Result: {:?}", spawn, result);
-    }
-    Ok(result)
+    cmd!("git", "describe", "--tags", "--exact-match")
+        .read()
+        .context("invalid git tags")
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output(git_status: &str, buf: &mut Vec<ANSIString>) {
+fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<ANSIString>) {
     let mut raw_branch = "";
     let mut dirty = false;
-    for line in git_status.lines() {
+    for line in git_status.as_ref().lines() {
         if line.starts_with("##") {
             raw_branch = &line[3..];
         } else {
@@ -446,13 +389,14 @@ fn simple_output(git_status: &str, buf: &mut Vec<ANSIString>) {
     buf.push(Fixed(CYAN).paint(branch));
     buf.push(Fixed(CYAN).paint(")"));
     if dirty {
-        buf.push(Fixed(RED).paint("*"));
+        buf.push(Red.paint("*"));
     }
 }
 
 /// Print output based on parsing of --format string
 fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
     let mut fmt_str = args.format.chars();
+    let plain = Style::new();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
@@ -463,13 +407,13 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
                     'd' => ri.fmt_diff_numstat(buf, args.indicators_only)?,
                     'g' => ri.fmt_branch_glyph(buf),
                     'm' => ri.unstaged.fmt_modified(buf, args.indicators_only),
-                    'n' => buf.push(Style::default().paint("git")),
-                    // 'r' => ri.fmt_upstream(buf)?,
-                    // 's' => ri.staged.fmt_modified(buf, args.indicators_only)?,
-                    // 't' => ri.fmt_stash(buf, args.indicators_only)?,
-                    // 'u' => ri.fmt_untracked(buf, args.indicators_only)?,
-                    // 'U' => ri.fmt_unmerged(buf, args.indicators_only)?,
-                    '%' => buf.push(Style::default().paint("%")),
+                    'n' => buf.push(plain.paint("git")),
+                    'r' => ri.fmt_upstream(buf),
+                    's' => ri.staged.fmt_modified(buf, args.indicators_only),
+                    't' => ri.fmt_stash(buf, args.indicators_only)?,
+                    'u' => ri.fmt_untracked(buf, args.indicators_only),
+                    'U' => ri.fmt_unmerged(buf, args.indicators_only),
+                    '%' => buf.push(plain.paint("%")),
                     _ => unreachable!(
                         "invalid format token allowed to reach print_output: \"%{}\"",
                         c
@@ -477,10 +421,10 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
                 }
             }
         } else {
-            buf.push(Style::default().paint(format!("{}", c)));
+            buf.push(plain.paint(c.to_string()));
         }
     }
-    buf.push(Style::default().paint("\n"));
+    buf.push(plain.paint("\n"));
     Ok(())
 }
 
@@ -494,6 +438,7 @@ fn main() -> Result {
         logger::init_logger(args.verbose);
     }
 
+    // TODO: make this work with ansi_term
     if args.no_color {
         env::set_var("TERM", "dumb");
     };
@@ -501,14 +446,14 @@ fn main() -> Result {
     env::set_current_dir(&args.dir)?;
 
     if args.simple_mode {
-        let status_cmd = exec(&[
+        let status = cmd!(
             "git",
             "status",
             "--porcelain",
             "--branch",
             "--untracked-files=no",
-        ])?;
-        let status = str::from_utf8(&status_cmd.stdout)?;
+        )
+        .read()?;
         let mut buf = Vec::new();
         simple_output(status, &mut buf);
         println!("{}", ANSIStrings(&buf));
@@ -546,21 +491,20 @@ fn main() -> Result {
     }
 
     // TODO: possibly use rev-parse first
-    let mut git_args = [
+    let mut ri = Repo::default();
+    let git_status = cmd!(
         "git",
         "status",
         "--porcelain=2",
         "--branch",
-        "--untracked-files=no",
-    ];
-    if opts.show_untracked {
-        git_args[4] = "--untracked-files=normal";
-    }
-    debug!("Cmd: {:?}", git_args);
-
-    let git_status = exec(&git_args)?;
-    let mut ri = Repo::default();
-    ri.parse_status(str::from_utf8(&git_status.stdout)?);
+        if opts.show_untracked {
+            "--untracked-files=normal"
+        } else {
+            "--untracked-files=no"
+        },
+    );
+    debug!("{:?}", git_status);
+    ri.parse_status(git_status.read()?.as_str());
 
     debug!("{:#?}", &ri);
     info!("{:#?}", &args);
