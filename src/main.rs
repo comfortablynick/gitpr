@@ -10,7 +10,7 @@ use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
 use duct::cmd;
 use log::{debug, info};
-use std::{convert::TryFrom, env, path::PathBuf, str};
+use std::{convert::TryFrom, default::Default, env, path::PathBuf, str};
 
 /// `anyhow::Result` with default type of `()`
 type Result<T = ()> = anyhow::Result<T>;
@@ -33,30 +33,75 @@ Tokenized string may contain:
 %t  stashed files indicator
 ------------------------------
 ";
-/// Blue ANSI color (intense)
-const BLUE: u8 = 12;
-/// Cyan ANSI color (intense)
-const CYAN: u8 = 14;
-/// Bold silver ANSI color
-const BOLD_SILVER: u8 = 188;
-/// Gray ANSI color
-const GRAY: u8 = 245;
+
+/// Color styling for elements of prompt
+#[derive(Debug, Default)]
+struct Styles {
+    plain:             Style,
+    ahead_behind:      Style,
+    branch:            Style,
+    branch_glyph:      Style,
+    commit:            Style,
+    diff:              Style,
+    dirty:             Style,
+    modified_unstaged: Style,
+    modified_staged:   Style,
+    stash:             Style,
+    untracked:         Style,
+    unmerged:          Style,
+    upstream:          Style,
+}
+
+impl Styles {
+    /// Blue ANSI color (intense)
+    const BLUE: u8 = 12;
+    /// Bold silver ANSI color
+    const BOLD_SILVER: u8 = 188;
+    /// Cyan ANSI color (intense)
+    const CYAN: u8 = 14;
+    /// Gray ANSI color
+    const GRAY: u8 = 245;
+
+    /// Full format
+    fn standard() -> Self {
+        Styles {
+            branch: Fixed(Self::BLUE).into(),
+            commit: Black.on(Green),
+            diff: Fixed(Self::BOLD_SILVER).into(),
+            modified_unstaged: Red.into(),
+            modified_staged: Red.into(),
+            stash: Yellow.into(),
+            untracked: Fixed(Self::GRAY).into(),
+            unmerged: Red.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Simple git prompt emulation
+    fn simple() -> Self {
+        Styles {
+            branch: Fixed(Self::CYAN).into(),
+            dirty: Red.into(),
+            ..Default::default()
+        }
+    }
+}
 
 /// Options from format string
 #[derive(Debug, Default)]
 struct Opt {
-    show_ahead_behind: bool,
-    show_branch: bool,
-    show_branch_glyph: bool,
-    show_commit: bool,
-    show_diff: bool,
-    show_upstream: bool,
-    show_stashed: bool,
-    show_staged_modified: bool,
+    show_ahead_behind:      bool,
+    show_branch:            bool,
+    show_branch_glyph:      bool,
+    show_commit:            bool,
+    show_diff:              bool,
+    show_upstream:          bool,
+    show_stashed:           bool,
+    show_staged_modified:   bool,
     show_unstaged_modified: bool,
-    show_untracked: bool,
-    show_unmerged: bool,
-    show_vcs: bool,
+    show_untracked:         bool,
+    show_unmerged:          bool,
+    show_vcs:               bool,
 }
 
 /// Command line configuration
@@ -80,6 +125,13 @@ struct Arg {
     /// Disable color in output
     #[clap(short, long)]
     no_color: bool,
+
+    /// Skip trimming extra whitespace inside rendered format string
+    ///
+    /// Does not apply to `-s/--simple`. Extra space may be present if an item
+    /// is in the format string but not in git repo, e.g., %t for stashed files
+    #[clap(short = "t", long)]
+    no_trim: bool,
 
     /// Simple mode (similar to factory git prompt)
     ///
@@ -105,30 +157,30 @@ struct Arg {
 /// Hold status of git repo attributes
 #[derive(Debug, Default)]
 struct Repo {
-    branch: Option<String>,
-    commit: Option<String>,
-    tag: Option<String>,
-    remote: Option<String>,
-    upstream: Option<String>,
-    stashed: u32,
-    ahead: u32,
-    behind: u32,
-    untracked: u32,
-    unmerged: u32,
+    branch:     Option<String>,
+    commit:     Option<String>,
+    tag:        Option<String>,
+    remote:     Option<String>,
+    upstream:   Option<String>,
+    stashed:    u32,
+    ahead:      u32,
+    behind:     u32,
+    untracked:  u32,
+    unmerged:   u32,
     insertions: u32,
-    deletions: u32,
-    unstaged: GitArea,
-    staged: GitArea,
+    deletions:  u32,
+    unstaged:   GitArea,
+    staged:     GitArea,
 }
 
 /// Hold status of specific git area (staged, unstaged)
 #[derive(Debug, Default)]
 struct GitArea {
     modified: u32,
-    added: u32,
-    deleted: u32,
-    renamed: u32,
-    copied: u32,
+    added:    u32,
+    deleted:  u32,
+    renamed:  u32,
+    copied:   u32,
 }
 
 impl Repo {
@@ -204,20 +256,19 @@ impl Repo {
     }
 
     /// Write formatted branch to buffer
-    fn fmt_branch(&self, buf: &mut Vec<ANSIString>) {
+    fn fmt_branch(&self, buf: &mut Vec<ANSIString>, style: &Style) {
         if let Some(s) = &self.branch {
-            buf.push(Fixed(BLUE).paint(s.to_string()));
+            buf.push(style.paint(s.to_string()));
         }
     }
 
     /// Write branch glyph to buffer
-    fn fmt_branch_glyph(&self, buf: &mut Vec<ANSIString>) {
-        let style = Style::new();
+    fn fmt_branch_glyph(&self, buf: &mut Vec<ANSIString>, style: &Style) {
         buf.push(style.paint(Repo::BRANCH_GLYPH.to_string()));
     }
 
     /// Write formatted commit to buffer
-    fn fmt_commit(&self, buf: &mut Vec<ANSIString>, len: usize) {
+    fn fmt_commit(&self, buf: &mut Vec<ANSIString>, style: &Style, len: usize) {
         if let Some(commit) = &self.commit {
             let display = if commit == "(initial)" {
                 "(initial)"
@@ -225,14 +276,12 @@ impl Repo {
                 commit[..len].into()
             }
             .to_string();
-            let style = Style::new().fg(Black).on(Green);
             buf.push(style.paint(display));
         }
     }
 
     /// Write formatted ahead/behind details to buffer
-    fn fmt_ahead_behind(&self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
-        let style = Style::default();
+    fn fmt_ahead_behind(&self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
         if self.ahead + self.behind == 0 {
             return;
         }
@@ -251,11 +300,15 @@ impl Repo {
     }
 
     /// Write formatted +n/-n git diff numstat details to buffer
-    fn fmt_diff_numstat(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) -> Result {
+    fn fmt_diff_numstat(
+        &mut self,
+        buf: &mut Vec<ANSIString>,
+        style: &Style,
+        indicators_only: bool,
+    ) -> Result {
         if !self.unstaged.has_changed() || indicators_only {
             return Ok(());
         }
-        let style = Fixed(BOLD_SILVER);
         if self.insertions == 0 && self.deletions == 0 {
             self.git_diff_numstat()?;
         }
@@ -274,7 +327,12 @@ impl Repo {
     }
 
     /// Write formatted stash details to buffer
-    fn fmt_stash(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) -> Result {
+    fn fmt_stash(
+        &mut self,
+        buf: &mut Vec<ANSIString>,
+        style: &Style,
+        indicators_only: bool,
+    ) -> Result {
         let mut git = self.git_root_dir()?;
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
@@ -283,7 +341,6 @@ impl Repo {
             .count();
         if st > 0 {
             self.stashed = u32::try_from(st)?;
-            let style = Style::new().fg(Yellow);
             buf.push(style.paint(Repo::STASH_GLYPH.to_string()));
             if !indicators_only {
                 buf.push(style.paint(st.to_string()));
@@ -293,9 +350,8 @@ impl Repo {
     }
 
     /// Write formatted untracked indicator and/or count to buffer
-    fn fmt_untracked(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
+    fn fmt_untracked(&mut self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
         if self.untracked > 0 {
-            let style = Fixed(GRAY);
             buf.push(style.paint(Repo::UNTRACKED_GLYPH.to_string()));
             if !indicators_only {
                 buf.push(style.paint(self.untracked.to_string()));
@@ -304,9 +360,8 @@ impl Repo {
     }
 
     /// Write formatted unmerged files indicator and/or count to buffer
-    fn fmt_unmerged(&mut self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
+    fn fmt_unmerged(&mut self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
         if self.unmerged > 0 {
-            let style = Red;
             buf.push(style.paint(Repo::UNMERGED_GLYPH.to_string()));
             if !indicators_only {
                 buf.push(style.paint(self.unmerged.to_string()));
@@ -315,9 +370,8 @@ impl Repo {
     }
 
     /// Write formatted upstream to buffer
-    fn fmt_upstream(&self, buf: &mut Vec<ANSIString>) {
+    fn fmt_upstream(&self, buf: &mut Vec<ANSIString>, style: &Style) {
         if let Some(r) = &self.upstream {
-            let style = Style::new();
             buf.push(style.paint(r.clone()));
         }
     }
@@ -336,11 +390,10 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self, buf: &mut Vec<ANSIString>, indicators_only: bool) {
+    fn fmt_modified(&self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
         if !self.has_changed() {
             return;
         }
-        let style = Red;
         buf.push(style.paint(Repo::MODIFIED_GLYPH));
         if !indicators_only {
             buf.push(style.paint(self.change_ct().to_string()));
@@ -385,35 +438,43 @@ fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<ANSIString>) {
         "Raw: {}; Split: {:?}; Branch: {}",
         raw_branch, split, branch
     );
-    buf.push(Fixed(CYAN).paint("("));
-    buf.push(Fixed(CYAN).paint(branch));
-    buf.push(Fixed(CYAN).paint(")"));
+    let styles = Styles::simple();
+    buf.push(styles.branch.paint("("));
+    buf.push(styles.branch.paint(branch));
+    buf.push(styles.branch.paint(")"));
     if dirty {
-        buf.push(Red.paint("*"));
+        buf.push(styles.dirty.paint("*"));
     }
 }
 
 /// Print output based on parsing of --format string
-fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
+fn print_output(mut ri: Repo, args: &Arg, buf: &mut Vec<ANSIString>) -> Result {
     let mut fmt_str = args.format.chars();
-    let plain = Style::new();
+    let styles = Styles::standard();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match c {
-                    'a' => ri.fmt_ahead_behind(buf, args.indicators_only),
-                    'b' => ri.fmt_branch(buf),
-                    'c' => ri.fmt_commit(buf, 7),
-                    'd' => ri.fmt_diff_numstat(buf, args.indicators_only)?,
-                    'g' => ri.fmt_branch_glyph(buf),
-                    'm' => ri.unstaged.fmt_modified(buf, args.indicators_only),
-                    'n' => buf.push(plain.paint("git")),
-                    'r' => ri.fmt_upstream(buf),
-                    's' => ri.staged.fmt_modified(buf, args.indicators_only),
-                    't' => ri.fmt_stash(buf, args.indicators_only)?,
-                    'u' => ri.fmt_untracked(buf, args.indicators_only),
-                    'U' => ri.fmt_unmerged(buf, args.indicators_only),
-                    '%' => buf.push(plain.paint("%")),
+                    'a' => ri.fmt_ahead_behind(buf, &styles.ahead_behind, args.indicators_only),
+                    'b' => ri.fmt_branch(buf, &styles.branch),
+                    'c' => ri.fmt_commit(buf, &styles.commit, 7),
+                    'd' => ri.fmt_diff_numstat(buf, &styles.diff, args.indicators_only)?,
+                    'g' => ri.fmt_branch_glyph(buf, &styles.branch_glyph),
+                    'm' => ri.unstaged.fmt_modified(
+                        buf,
+                        &styles.modified_unstaged,
+                        args.indicators_only,
+                    ),
+                    'n' => buf.push(styles.plain.paint("git")),
+                    'r' => ri.fmt_upstream(buf, &styles.upstream),
+                    's' => {
+                        ri.staged
+                            .fmt_modified(buf, &styles.modified_staged, args.indicators_only)
+                    }
+                    't' => ri.fmt_stash(buf, &styles.stash, args.indicators_only)?,
+                    'u' => ri.fmt_untracked(buf, &styles.untracked, args.indicators_only),
+                    'U' => ri.fmt_unmerged(buf, &styles.unmerged, args.indicators_only),
+                    '%' => buf.push(styles.plain.paint("%")),
                     _ => unreachable!(
                         "invalid format token allowed to reach print_output: \"%{}\"",
                         c
@@ -421,10 +482,9 @@ fn print_output(mut ri: Repo, args: Arg, buf: &mut Vec<ANSIString>) -> Result {
                 }
             }
         } else {
-            buf.push(plain.paint(c.to_string()));
+            buf.push(styles.plain.paint(c.to_string()));
         }
     }
-    buf.push(plain.paint("\n"));
     Ok(())
 }
 
@@ -438,11 +498,6 @@ fn main() -> Result {
         logger::init_logger(args.verbose);
     }
 
-    // TODO: make this work with ansi_term
-    if args.no_color {
-        env::set_var("TERM", "dumb");
-    };
-
     env::set_current_dir(&args.dir)?;
 
     if args.simple_mode {
@@ -454,9 +509,9 @@ fn main() -> Result {
             "--untracked-files=no",
         )
         .read()?;
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(255);
         simple_output(status, &mut buf);
-        println!("{}", ANSIStrings(&buf));
+        print!("{}", ANSIStrings(&buf));
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
@@ -509,8 +564,17 @@ fn main() -> Result {
     debug!("{:#?}", &ri);
     info!("{:#?}", &args);
 
-    print_output(ri, args, &mut buf)?;
-    print!("{}", ANSIStrings(&buf));
+    print_output(ri, &args, &mut buf)?;
+    let colored = if args.no_trim {
+        ANSIStrings(&buf).to_string()
+    } else {
+        ANSIStrings(&buf)
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    print!("{}", colored.trim_end());
     Ok(())
 }
 
@@ -536,7 +600,7 @@ mod tests {
         const DIRTY: &str = "## master...origin/master
  M src/main.rs
 ?? src/tests.rs";
-        let expected = "\u{1b}[38;5;14m(master)\u{1b}[38;5;124m*\u{1b}[0m";
+        let expected = "\u{1b}[38;5;14m(master)\u{1b}[31m*\u{1b}[0m";
 
         let mut buf = Vec::new();
         simple_output(DIRTY, &mut buf);
