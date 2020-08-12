@@ -19,11 +19,11 @@ build:
 
 # rebuild docs
 doc:
-    cargo doc
+    cargo makedocs
 
 # rebuild docs and start simple static server
 docs +PORT='40000':
-    cargo doc && http target/doc -p {{PORT}}
+    cargo makedocs && http target/doc -p {{PORT}}
 
 # start server for docs and update upon changes
 docslive:
@@ -31,11 +31,11 @@ docslive:
 
 # rebuild docs and start simple static server that watches for changes
 docw +PORT='40000':
-    cargo watch -x 'doc --color=always' -s "http target/doc -p {{PORT}}"
+    cargo watch -x makedocs -s "http target/doc -p {{PORT}}"
 
 # rebuild docs and start simple static server that watches for changes (in parallel)
 docwp +PORT='40000':
-    parallel --lb ::: "cargo watch -x 'doc --color=always'" "http target/doc -p {{PORT}}"
+    parallel --lb ::: "cargo watch -x makedocs" "http target/doc -p {{PORT}}"
 
 # install binary to ~/.cargo/bin
 install:
