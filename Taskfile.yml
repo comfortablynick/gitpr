@@ -1,0 +1,57 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  BIN_NAME: gitpr{{exeExt}}
+  DOCS_PORT: 40000
+
+tasks:
+  default:
+    - task: build
+
+  build:
+    desc: Build project (default)
+    cmds:
+      - cargo build
+    sources:
+      - ./src/*.rs
+    generates:
+      - ./target/debug/{{.BIN_NAME}}
+    method: checksum
+
+  autobuild:
+    desc: Rebuild when files are changed
+    cmds:
+      - cargo watch -x build
+
+  doc:
+    desc: Rebuild docs
+    cmds: [cargo makedocs]
+
+  docs:
+    desc: Rebuild docs and start simple static server
+    cmds:
+      - cargo makedocs && http target/doc -p {{.DOCS_PORT}}
+
+  docslive:
+    desc: Start server for docs and update upon changes
+    cmds:
+      - light-server -c .lightrc
+
+  docw:
+    desc: Rebuild docs and start simple static server that watches for changes
+    cmds:
+      - cargo watch -x makedocs -s "http target/doc -p {{.DOCS_PORT}}"
+
+  docwp:
+    desc: Rebuild docs and start simple static server that watches for changes (in parallel)
+    cmds:
+      - 'parallel --lb ::: "cargo watch -x makedocs" "http target/doc -p {{.DOCS_PORT}}"'
+
+  run:
+    desc: Build and run
+    cmds:
+      - task: build
+      - ./target/debug/{{.BIN_NAME}}
+    silent: true
