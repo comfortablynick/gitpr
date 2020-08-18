@@ -1,18 +1,14 @@
 //! Print git repo status. Handy for shell prompt.
 mod logger;
 
-use ansi_term::{
-    ANSIString, ANSIStrings,
-    Color::{Black, Fixed, Green, Red, Yellow},
-    Style,
-};
+use ansi_term::{ANSIString, ANSIStrings, Style};
 use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
 use duct::cmd;
 use log::{debug, info};
 use std::{convert::TryFrom, default::Default, env, io::Write, path::PathBuf, str};
 #[allow(unused_imports)]
-use writecolor::{Color, Style as Style2, WriteStyle};
+use writecolor::{Color::*, Style as Style2, WriteStyle};
 
 /// `anyhow::Result` with default type of `()`
 type Result<T = ()> = anyhow::Result<T>;
@@ -60,12 +56,13 @@ impl Styles {
     /// Bold silver ANSI color
     const BOLD_SILVER: u8 = 188;
     /// Cyan ANSI color (intense)
-    const CYAN: u8 = 14;
+    // const CYAN: u8 = 14;
     /// Gray ANSI color
     const GRAY: u8 = 245;
 
     /// Full format
     fn standard() -> Self {
+        use ansi_term::Color::*;
         Styles {
             branch: Fixed(Self::BLUE).into(),
             commit: Black.on(Green),
@@ -87,6 +84,60 @@ impl Styles {
     //         ..Default::default()
     //     }
     // }
+}
+
+/// Color styling for elements of prompt
+#[derive(Debug, Default)]
+struct StyleSet {
+    plain:             Style2,
+    ahead_behind:      Style2,
+    branch:            Style2,
+    branch_glyph:      Style2,
+    commit:            Style2,
+    diff:              Style2,
+    dirty:             Style2,
+    modified_unstaged: Style2,
+    modified_staged:   Style2,
+    stash:             Style2,
+    untracked:         Style2,
+    unmerged:          Style2,
+    upstream:          Style2,
+}
+
+#[allow(dead_code)]
+impl StyleSet {
+    /// Blue ANSI color (intense)
+    const BLUE: u8 = 12;
+    /// Bold silver ANSI color
+    const BOLD_SILVER: u8 = 188;
+    /// Cyan ANSI color (intense)
+    const CYAN: u8 = 14;
+    /// Gray ANSI color
+    const GRAY: u8 = 245;
+
+    /// Full format
+    fn standard() -> Self {
+        Self {
+            branch: Blue.into(),
+            commit: Black.on(Green),
+            diff: Fixed(Self::BOLD_SILVER).normal(),
+            modified_unstaged: Red.into(),
+            modified_staged: Red.into(),
+            stash: Yellow.into(),
+            untracked: Fixed(Self::GRAY).into(),
+            unmerged: Red.into(),
+            ..StyleSet::default()
+        }
+    }
+
+    /// Simple git prompt emulation
+    fn simple() -> Self {
+        Self {
+            branch: Fixed(Self::CYAN).into(),
+            dirty: Red.into(),
+            ..StyleSet::default()
+        }
+    }
 }
 
 /// Options from format string
@@ -440,19 +491,13 @@ fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<u8>) -> Result {
         "Raw: {}; Split: {:?}; Branch: {}",
         raw_branch, split, branch
     );
-    Style2::from_fg(Color::Ansi256(Styles::CYAN)).write_to(buf)?;
+    let styles = StyleSet::simple();
+    styles.branch.write_to(buf)?;
     write!(buf, "({})", branch)?;
     if dirty {
-        Style2::from_fg(Color::Red).write_to(buf)?;
+        styles.dirty.write_to(buf)?;
         write!(buf, "*")?;
     }
-    // let styles = Styles::simple();
-    // buf.push(styles.branch.paint("("));
-    // buf.push(styles.branch.paint(branch));
-    // buf.push(styles.branch.paint(")"));
-    // if dirty {
-    //     buf.push(styles.dirty.paint("*"));
-    // }
     Style2::default().write_to(buf)?;
     Ok(())
 }
