@@ -1,14 +1,13 @@
 //! Print git repo status. Handy for shell prompt.
 mod logger;
 
-use ansi_term::{ANSIString, ANSIStrings, Style};
+// use ansi_term::{ANSIString, ANSIStrings, Style};
 use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
 use duct::cmd;
 use log::{debug, info};
 use std::{convert::TryFrom, default::Default, env, io::Write, path::PathBuf, str};
-#[allow(unused_imports)]
-use writecolor::{Color::*, Style as Style2, WriteStyle};
+use writecolor::{Color::*, Style};
 
 /// `anyhow::Result` with default type of `()`
 type Result<T = ()> = anyhow::Result<T>;
@@ -34,7 +33,7 @@ Tokenized string may contain:
 
 /// Color styling for elements of prompt
 #[derive(Debug, Default)]
-struct Styles {
+struct StyleSet {
     plain:             Style,
     ahead_behind:      Style,
     branch:            Style,
@@ -48,60 +47,6 @@ struct Styles {
     untracked:         Style,
     unmerged:          Style,
     upstream:          Style,
-}
-
-impl Styles {
-    /// Blue ANSI color (intense)
-    const BLUE: u8 = 12;
-    /// Bold silver ANSI color
-    const BOLD_SILVER: u8 = 188;
-    /// Cyan ANSI color (intense)
-    // const CYAN: u8 = 14;
-    /// Gray ANSI color
-    const GRAY: u8 = 245;
-
-    /// Full format
-    fn standard() -> Self {
-        use ansi_term::Color::*;
-        Styles {
-            branch: Fixed(Self::BLUE).into(),
-            commit: Black.on(Green),
-            diff: Fixed(Self::BOLD_SILVER).into(),
-            modified_unstaged: Red.into(),
-            modified_staged: Red.into(),
-            stash: Yellow.into(),
-            untracked: Fixed(Self::GRAY).into(),
-            unmerged: Red.into(),
-            ..Default::default()
-        }
-    }
-
-    // /// Simple git prompt emulation
-    // fn simple() -> Self {
-    //     Styles {
-    //         branch: Fixed(Self::CYAN).into(),
-    //         dirty: Red.into(),
-    //         ..Default::default()
-    //     }
-    // }
-}
-
-/// Color styling for elements of prompt
-#[derive(Debug, Default)]
-struct StyleSet {
-    plain:             Style2,
-    ahead_behind:      Style2,
-    branch:            Style2,
-    branch_glyph:      Style2,
-    commit:            Style2,
-    diff:              Style2,
-    dirty:             Style2,
-    modified_unstaged: Style2,
-    modified_staged:   Style2,
-    stash:             Style2,
-    untracked:         Style2,
-    unmerged:          Style2,
-    upstream:          Style2,
 }
 
 #[allow(dead_code)]
@@ -118,7 +63,7 @@ impl StyleSet {
     /// Full format
     fn standard() -> Self {
         Self {
-            branch: Blue.into(),
+            branch: Blue.intense(),
             commit: Black.on(Green),
             diff: Fixed(Self::BOLD_SILVER).normal(),
             modified_unstaged: Red.into(),
@@ -309,53 +254,63 @@ impl Repo {
     }
 
     /// Write formatted branch to buffer
-    fn fmt_branch(&self, buf: &mut Vec<ANSIString>, style: &Style) {
+    fn fmt_branch<W: Write>(&self, buf: &mut W, style: &Style) -> Result {
         if let Some(s) = &self.branch {
-            buf.push(style.paint(s.to_string()));
+            write!(buf, "{}", style.paint(s))?;
         }
+        Ok(())
     }
 
     /// Write branch glyph to buffer
-    fn fmt_branch_glyph(&self, buf: &mut Vec<ANSIString>, style: &Style) {
-        buf.push(style.paint(Repo::BRANCH_GLYPH.to_string()));
+    fn fmt_branch_glyph<W: Write>(&self, buf: &mut W, style: &Style) -> Result {
+        write!(buf, "{}", style.paint(Repo::BRANCH_GLYPH))?;
+        Ok(())
     }
 
     /// Write formatted commit to buffer
-    fn fmt_commit(&self, buf: &mut Vec<ANSIString>, style: &Style, len: usize) {
+    fn fmt_commit<W: Write>(&self, buf: &mut W, style: &Style, len: usize) -> Result {
         if let Some(commit) = &self.commit {
             let display = if commit == "(initial)" {
                 "(initial)"
             } else {
                 commit[..len].into()
-            }
-            .to_string();
-            buf.push(style.paint(display));
+            };
+            write!(buf, "{}", style.paint(display))?;
         }
+        Ok(())
     }
 
     /// Write formatted ahead/behind details to buffer
-    fn fmt_ahead_behind(&self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
+    fn fmt_ahead_behind<W: Write>(
+        &self,
+        buf: &mut W,
+        style: &Style,
+        indicators_only: bool,
+    ) -> Result {
         if self.ahead + self.behind == 0 {
-            return;
+            return Ok(());
         }
+        style.write_to(buf)?;
         if self.ahead != 0 {
-            buf.push(style.paint(Repo::AHEAD_GLYPH));
+            buf.write_all(Repo::AHEAD_GLYPH.as_bytes())?;
             if !indicators_only {
-                buf.push(style.paint(self.ahead.to_string()));
+                write!(buf, "{}", self.ahead)?;
             }
         }
         if self.behind != 0 {
-            buf.push(style.paint(Repo::BEHIND_GLYPH));
+            buf.write_all(Repo::BEHIND_GLYPH.as_bytes())?;
             if !indicators_only {
-                buf.push(style.paint(self.behind.to_string()));
+                write!(buf, "{}", self.behind)?;
             }
         }
+        Style::reset().write_to(buf)?;
+        Ok(())
     }
 
     /// Write formatted +n/-n git diff numstat details to buffer
-    fn fmt_diff_numstat(
+    fn fmt_diff_numstat<W: Write>(
         &mut self,
-        buf: &mut Vec<ANSIString>,
+        buf: &mut W,
         style: &Style,
         indicators_only: bool,
     ) -> Result {
@@ -365,27 +320,22 @@ impl Repo {
         if self.insertions == 0 && self.deletions == 0 {
             self.git_diff_numstat()?;
         }
+        style.write_to(buf)?;
         if self.insertions > 0 {
-            buf.push(style.paint("+"));
-            buf.push(style.paint(self.insertions.to_string()));
+            write!(buf, "+{}", self.insertions)?;
             if self.deletions > 0 {
-                buf.push(style.paint("/"));
+                write!(buf, "/")?;
             }
         }
         if self.deletions > 0 {
-            buf.push(style.paint("-"));
-            buf.push(style.paint(self.deletions.to_string()));
+            write!(buf, "-{}", self.deletions)?;
         }
+        Style::reset().write_to(buf)?;
         Ok(())
     }
 
     /// Write formatted stash details to buffer
-    fn fmt_stash(
-        &mut self,
-        buf: &mut Vec<ANSIString>,
-        style: &Style,
-        indicators_only: bool,
-    ) -> Result {
+    fn fmt_stash<W: Write>(&mut self, buf: &mut W, style: &Style, indicators_only: bool) -> Result {
         let mut git = self.git_root_dir()?;
         git.push_str("/logs/refs/stash");
         let st = std::fs::read_to_string(git)
@@ -394,39 +344,58 @@ impl Repo {
             .count();
         if st > 0 {
             self.stashed = u32::try_from(st)?;
-            buf.push(style.paint(Repo::STASH_GLYPH.to_string()));
+            style.write_to(buf)?;
+            buf.write_all(Repo::STASH_GLYPH.as_bytes())?;
             if !indicators_only {
-                buf.push(style.paint(st.to_string()));
+                write!(buf, "{}", self.stashed)?;
             }
+            Style::reset().write_to(buf)?;
         }
         Ok(())
     }
 
     /// Write formatted untracked indicator and/or count to buffer
-    fn fmt_untracked(&mut self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
+    fn fmt_untracked<W: Write>(
+        &mut self,
+        buf: &mut W,
+        style: &Style,
+        indicators_only: bool,
+    ) -> Result {
         if self.untracked > 0 {
-            buf.push(style.paint(Repo::UNTRACKED_GLYPH.to_string()));
+            style.write_to(buf)?;
+            buf.write_all(Repo::UNTRACKED_GLYPH.as_bytes())?;
             if !indicators_only {
-                buf.push(style.paint(self.untracked.to_string()));
+                write!(buf, "{}", self.untracked)?;
             }
+            Style::reset().write_to(buf)?;
         }
+        Ok(())
     }
 
     /// Write formatted unmerged files indicator and/or count to buffer
-    fn fmt_unmerged(&mut self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
+    fn fmt_unmerged<W: Write>(
+        &mut self,
+        buf: &mut W,
+        style: &Style,
+        indicators_only: bool,
+    ) -> Result {
         if self.unmerged > 0 {
-            buf.push(style.paint(Repo::UNMERGED_GLYPH.to_string()));
+            style.write_to(buf)?;
+            buf.write_all(Repo::UNMERGED_GLYPH.as_bytes())?;
             if !indicators_only {
-                buf.push(style.paint(self.unmerged.to_string()));
+                write!(buf, "{}", self.unmerged)?;
             }
+            Style::reset().write_to(buf)?;
         }
+        Ok(())
     }
 
     /// Write formatted upstream to buffer
-    fn fmt_upstream(&self, buf: &mut Vec<ANSIString>, style: &Style) {
+    fn fmt_upstream<W: Write>(&self, buf: &mut W, style: &Style) -> Result {
         if let Some(r) = &self.upstream {
-            buf.push(style.paint(r.clone()));
+            write!(buf, "{}", style.paint(r))?;
         }
+        Ok(())
     }
 }
 
@@ -443,14 +412,17 @@ impl GitArea {
         }
     }
 
-    fn fmt_modified(&self, buf: &mut Vec<ANSIString>, style: &Style, indicators_only: bool) {
+    fn fmt_modified<W: Write>(&self, buf: &mut W, style: &Style, indicators_only: bool) -> Result {
         if !self.has_changed() {
-            return;
+            return Ok(());
         }
-        buf.push(style.paint(Repo::MODIFIED_GLYPH));
+        style.write_to(buf)?;
+        buf.write(Repo::MODIFIED_GLYPH.as_bytes())?;
         if !indicators_only {
-            buf.push(style.paint(self.change_ct().to_string()));
+            write!(buf, "{}", self.change_ct())?;
         }
+        Style::reset().write_to(buf)?;
+        Ok(())
     }
 
     fn has_changed(&self) -> bool {
@@ -498,38 +470,39 @@ fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<u8>) -> Result {
         styles.dirty.write_to(buf)?;
         write!(buf, "*")?;
     }
-    Style2::default().write_to(buf)?;
+    Style::reset().write_to(buf)?;
     Ok(())
 }
 
 /// Print output based on parsing of --format string
-fn print_output(mut ri: Repo, args: &Arg, buf: &mut Vec<ANSIString>) -> Result {
+fn print_output<W: Write>(mut ri: Repo, args: &Arg, buf: &mut W) -> Result {
     let mut fmt_str = args.format.chars();
-    let styles = Styles::standard();
+    let styles = StyleSet::standard();
     while let Some(c) = fmt_str.next() {
         if c == '%' {
             if let Some(c) = fmt_str.next() {
                 match c {
-                    'a' => ri.fmt_ahead_behind(buf, &styles.ahead_behind, args.indicators_only),
-                    'b' => ri.fmt_branch(buf, &styles.branch),
-                    'c' => ri.fmt_commit(buf, &styles.commit, 7),
+                    'a' => ri.fmt_ahead_behind(buf, &styles.ahead_behind, args.indicators_only)?,
+                    'b' => ri.fmt_branch(buf, &styles.branch)?,
+                    'c' => ri.fmt_commit(buf, &styles.commit, 7)?,
                     'd' => ri.fmt_diff_numstat(buf, &styles.diff, args.indicators_only)?,
-                    'g' => ri.fmt_branch_glyph(buf, &styles.branch_glyph),
+                    'g' => ri.fmt_branch_glyph(buf, &styles.branch_glyph)?,
                     'm' => ri.unstaged.fmt_modified(
                         buf,
                         &styles.modified_unstaged,
                         args.indicators_only,
-                    ),
-                    'n' => buf.push(styles.plain.paint("git")),
-                    'r' => ri.fmt_upstream(buf, &styles.upstream),
-                    's' => {
-                        ri.staged
-                            .fmt_modified(buf, &styles.modified_staged, args.indicators_only)
-                    }
+                    )?,
+                    'n' => write!(buf, "{}git", styles.plain)?,
+                    'r' => ri.fmt_upstream(buf, &styles.upstream)?,
+                    's' => ri.staged.fmt_modified(
+                        buf,
+                        &styles.modified_staged,
+                        args.indicators_only,
+                    )?,
                     't' => ri.fmt_stash(buf, &styles.stash, args.indicators_only)?,
-                    'u' => ri.fmt_untracked(buf, &styles.untracked, args.indicators_only),
-                    'U' => ri.fmt_unmerged(buf, &styles.unmerged, args.indicators_only),
-                    '%' => buf.push(styles.plain.paint("%")),
+                    'u' => ri.fmt_untracked(buf, &styles.untracked, args.indicators_only)?,
+                    'U' => ri.fmt_unmerged(buf, &styles.unmerged, args.indicators_only)?,
+                    '%' => write!(buf, "{}%", styles.plain)?,
                     _ => unreachable!(
                         "invalid format token allowed to reach print_output: \"%{}\"",
                         c
@@ -537,7 +510,11 @@ fn print_output(mut ri: Repo, args: &Arg, buf: &mut Vec<ANSIString>) -> Result {
                 }
             }
         } else {
-            buf.push(styles.plain.paint(c.to_string()));
+            if c != ' ' {
+                // Only write plain style if there's something there
+                styles.plain.write_to(buf)?;
+            }
+            write!(buf, "{}", c)?;
         }
     }
     Ok(())
@@ -552,7 +529,9 @@ fn main() -> Result {
     if !args.quiet {
         logger::init_logger(args.verbose);
     }
-
+    if args.no_color {
+        env::set_var("NO_COLOR", "1");
+    }
     env::set_current_dir(&args.dir)?;
 
     if args.simple_mode {
@@ -566,7 +545,6 @@ fn main() -> Result {
         .read()?;
         let mut buf = Vec::with_capacity(255);
         simple_output(status, &mut buf)?;
-        // print!("{}", ANSIStrings(&buf));
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
         lock.write_all(&buf)?;
@@ -623,47 +601,50 @@ fn main() -> Result {
     info!("{:#?}", &args);
 
     print_output(ri, &args, &mut buf)?;
-    let colored = if args.no_trim {
-        ANSIStrings(&buf).to_string()
+    let out = if args.no_trim {
+        String::from_utf8(buf)?
     } else {
-        ANSIStrings(&buf)
+        String::from_utf8(buf)?
             .to_string()
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
     };
-    print!("{}", colored.trim_end());
+    debug!("{:?}", out);
+    let test = out.split_whitespace().collect::<Vec<_>>();
+    debug!("{:?}", test);
+    print!("{}", out);
     Ok(())
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use pretty_assertions::assert_eq;
-//
-//     #[test]
-//     fn test_simple_clean() -> Result {
-//         const CLEAN: &str = "## master...origin/master";
-//         let expected = "\u{1b}[38;5;14m(master)\u{1b}[0m";
-//
-//         let mut buf = Vec::new();
-//         simple_output(CLEAN, &mut buf);
-//         let result = ANSIStrings(&buf).to_string();
-//         assert_eq!(result, expected);
-//         Ok(())
-//     }
-//
-//     #[test]
-//     fn test_simple_dirty() -> Result {
-//         const DIRTY: &str = "## master...origin/master
-//  M src/main.rs
-// ?? src/tests.rs";
-//         let expected = "\u{1b}[38;5;14m(master)\u{1b}[31m*\u{1b}[0m";
-//
-//         let mut buf = Vec::new();
-//         simple_output(DIRTY, &mut buf);
-//         let result = ANSIStrings(&buf).to_string();
-//         assert_eq!(result, expected);
-//         Ok(())
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn test_simple_clean() -> Result {
+        const CLEAN: &str = "## master...origin/master";
+        let expected = "\u{1b}[38;5;14m(master)\u{1b}[0m";
+
+        let mut buf = Vec::new();
+        simple_output(CLEAN, &mut buf)?;
+        let result = str::from_utf8(&buf)?;
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_simple_dirty() -> Result {
+        const DIRTY: &str = "## master...origin/master
+  M src/main.rs
+ ?? src/tests.rs";
+        let expected = "\u{1b}[38;5;14m(master)\u{1b}[31m*\u{1b}[0m";
+
+        let mut buf = Vec::new();
+        simple_output(DIRTY, &mut buf)?;
+        let result = str::from_utf8(&buf)?;
+        assert_eq!(result, expected);
+        Ok(())
+    }
+}
