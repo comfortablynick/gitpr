@@ -6,7 +6,14 @@ use anyhow::{format_err, Context};
 use clap::{AppSettings, ArgSettings, Clap};
 use duct::cmd;
 use log::{debug, info};
-use std::{convert::TryFrom, default::Default, env, io::Write, path::PathBuf, str};
+use std::{
+    convert::TryFrom,
+    default::Default,
+    env,
+    io::Write,
+    path::{Path, PathBuf},
+    str,
+};
 use writecolor::{Color::*, Style};
 
 /// `anyhow::Result` with default type of `()`
@@ -136,6 +143,10 @@ struct Arg {
     /// Does not accept format string (-f, --format)
     #[clap(short, long = "simple")]
     simple_mode: bool,
+
+    /// Simple mode 2 (development)
+    #[clap(short = "S", long = "simple2")]
+    simple_mode2: bool,
 
     /// Format print-f style string
     #[clap(
@@ -400,6 +411,7 @@ impl Repo {
 }
 
 impl GitArea {
+    /// Parse git status to determine what has been modified
     fn parse_modified(&mut self, ln: char) {
         match ln {
             'M' => self.modified += 1,
@@ -442,7 +454,11 @@ fn git_tag() -> Result<String> {
 }
 
 /// Simple output to mimic default git prompt
-fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<u8>) -> Result {
+fn simple_output<S, W>(git_status: S, buf: &mut W) -> Result
+where
+    S: AsRef<str>,
+    W: Write,
+{
     let mut raw_branch = "";
     let mut dirty = false;
     for line in git_status.as_ref().lines() {
@@ -471,6 +487,73 @@ fn simple_output<S: AsRef<str>>(git_status: S, buf: &mut Vec<u8>) -> Result {
         write!(buf, "*")?;
     }
     Style::reset().write_to(buf)?;
+    Ok(())
+}
+
+/// Return true if we're inside the hidden .git/ directory in a repo.
+fn inside_dotgit_dir(wd: &Path) -> bool {
+    for path_component in wd {
+        if path_component == ".git" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Return the absolute path to the .git/HEAD file, which contains the name of
+/// the current branch. If the current working directory isn't in a git repo, it
+/// will return None.
+fn find_head(dir: &Path) -> Option<PathBuf> {
+    // Iterate through all the parent directories and see if $DIR/.git/HEAD is
+    // a file that exists.
+    //   /home/me/projects/foo/src/bar/.git/HEAD ??? -> doesn't exist
+    //   /home/me/projects/foo/src/.git/HEAD ???     -> doesn't exist
+    //   /home/me/projects/foo/.git/HEAD ???         -> found it!
+    for d in dir.ancestors() {
+        let p = d.join(".git/HEAD");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Get absolute dir of .git; should be equivalent to `git rev-parse --absolute-git-dir`
+fn find_git_dir(dir: &Path) -> Option<PathBuf> {
+    find_head(dir).and_then(|f| f.parent().map(|f| f.to_path_buf()))
+}
+
+/// Return the name of the current branch. If we're in a directory that isn't
+/// inside a git repo, return `None`.
+fn current_branch(wd: &Path) -> Option<String> {
+    if inside_dotgit_dir(wd) {
+        // Print ".git" instead of the branch name.
+        return Some(".git".to_owned());
+    }
+    // Find the path to the .git/HEAD file.
+    let path_to_head = find_head(wd)?;
+    // Read .git/HEAD and extract the branch name.
+    std::fs::read_to_string(path_to_head)
+        .map(|s| s.trim().trim_start_matches("ref: refs/heads/").to_owned())
+        .ok()
+}
+
+/// Simple output using different means
+fn simple_output2(buf: &mut impl Write) -> Result {
+    let _ = buf;
+    let cwd = env::current_dir()?;
+    let dirty = cmd!("git", "status", "--short")
+        .stdout_capture()
+        .run()
+        .map(|out| out.stdout.len() != 0)
+        .unwrap_or(false);
+    if dirty {
+        debug!("Repo is dirty!");
+    }
+    if let Some(branch) = current_branch(&cwd) {
+        debug!("Current branch: {}", branch);
+    }
+    debug!("Absolute git dir: {:?}", find_git_dir(&cwd));
     Ok(())
 }
 
@@ -524,7 +607,6 @@ fn print_output<W: Write>(mut ri: Repo, args: &Arg, buf: &mut W) -> Result {
 fn main() -> Result {
     let args = Arg::parse();
     let mut opts: Opt = Default::default();
-    let mut buf = Vec::new();
 
     if !args.quiet {
         logger::init_logger(args.verbose);
@@ -548,6 +630,11 @@ fn main() -> Result {
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
         lock.write_all(&buf)?;
+        return Ok(());
+    }
+    if args.simple_mode2 {
+        let mut buf = Vec::with_capacity(255);
+        simple_output2(&mut buf)?;
         return Ok(());
     }
     // TODO: use env vars for format str and glyphs
@@ -600,6 +687,7 @@ fn main() -> Result {
     debug!("{:#?}", &ri);
     info!("{:#?}", &args);
 
+    let mut buf = vec![];
     print_output(ri, &args, &mut buf)?;
     let out = if args.no_trim {
         String::from_utf8(buf)?
@@ -623,7 +711,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_simple_clean() -> Result {
+    fn simple_clean() -> Result {
         const CLEAN: &str = "## master...origin/master";
         let expected = "\u{1b}[38;5;14m(master)\u{1b}[0m";
 
@@ -635,7 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_dirty() -> Result {
+    fn simple_dirty() -> Result {
         const DIRTY: &str = "## master...origin/master
   M src/main.rs
  ?? src/tests.rs";
@@ -645,6 +733,15 @@ mod tests {
         simple_output(DIRTY, &mut buf)?;
         let result = str::from_utf8(&buf)?;
         assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn absolute_git_dir() -> Result {
+        let fs_dir =
+            find_git_dir(&env::current_dir()?).ok_or_else(|| format_err!("cannot find git dir"))?;
+        let git_dir = cmd!("git", "rev-parse", "--absolute-git-dir").read()?;
+        assert_eq!(git_dir, fs_dir.to_string_lossy());
         Ok(())
     }
 }
